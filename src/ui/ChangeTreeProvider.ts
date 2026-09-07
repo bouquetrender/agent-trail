@@ -107,7 +107,7 @@ export class ChangeTreeProvider
 
   getChildren(element?: ChangeTreeItem): ChangeTreeItem[] {
     if (!element) {
-      return this.diffs.getAllAgentChanges().length > 0
+      return this.diffs.hasAgentChanges()
         ? [new CurrentTurnItem(), new AllAgentChangesItem()]
         : [];
     }

@@ -1,5 +1,7 @@
 # cursor-forgery
 
+<img width="100%" height="auto" alt="ScreenShot_2026-09-03_181158_713" src="https://github.com/user-attachments/assets/b3858d45-e78c-4398-9b2a-ed25f9cfb535" />
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 `cursor-forgery` 是一个模仿 Cursor 交互操作的 VS Code 扩展插件，用于审查 Agent 对代码文件的修改，也可快速将代码选区、整个文件或当前文件夹加入 Codex 对话。插件不调用任何 API，也不会修改 Agent 的工作方式。

@@ -67,6 +67,19 @@ export function activate(context: vscode.ExtensionContext): void {
       sessionStartInProgress = false;
     }
   };
+  const addToCodexThread = async (uri?: vscode.Uri): Promise<void> => {
+    if (!uri) {
+      return;
+    }
+    if (!vscode.extensions.getExtension("openai.chatgpt")) {
+      void vscode.window.showInformationMessage(
+        "Install and enable the Codex extension to add this resource.",
+      );
+      return;
+    }
+
+    await vscode.commands.executeCommand("chatgpt.addFileToThread", uri);
+  };
 
   context.subscriptions.push(
     session,
@@ -127,6 +140,10 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("cursorForgery.rejectAll", () =>
       fileCommands.rejectAll(),
+    ),
+    vscode.commands.registerCommand(
+      "cursorForgery.addToCodexThread",
+      addToCodexThread,
     ),
   );
 

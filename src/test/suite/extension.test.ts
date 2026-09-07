@@ -56,6 +56,7 @@ suite("Agent Diff Review extension", () => {
       "cursorForgery.rejectFile",
       "cursorForgery.acceptAll",
       "cursorForgery.rejectAll",
+      "cursorForgery.addToCodexThread",
     ]) {
       assert.ok(commands.includes(command), `${command} is not registered`);
     }
@@ -87,6 +88,68 @@ suite("Agent Diff Review extension", () => {
     await store.set(sampleUri, MODIFIED);
     assert.strictEqual(await store.get(sampleUri), MODIFIED);
     store.clear();
+  });
+
+  test("keeps pending hunk counts correct across replacements, removals and reset", async () => {
+    const store = new class extends MemoryBaselineStore {
+      failReads = false;
+
+      async get(uri: vscode.Uri): Promise<string | undefined> {
+        if (this.failReads) {
+          throw new Error("Baseline is unreadable");
+        }
+        return super.get(uri);
+      }
+    }();
+    const diffs = new DiffService(store);
+    const countsAtEvents: number[] = [];
+    const subscription = diffs.onDidChange(() => {
+      countsAtEvents.push(diffs.getHunkCount());
+    });
+
+    try {
+      await store.capture({ uris: [sampleUri, secondUri] });
+      assert.strictEqual(diffs.getHunkCount(), 0);
+      assert.strictEqual(diffs.hasAgentChanges(), false);
+
+      await store.set(sampleUri, "ALPHA\nbeta\nGAMMA\n");
+      await store.set(secondUri, SECOND_MODIFIED);
+      await diffs.recomputeAll();
+      assert.strictEqual(diffs.getHunkCount(), 3);
+      assert.strictEqual(diffs.hasAgentChanges(), true);
+
+      await diffs.recompute(sampleUri);
+      assert.strictEqual(diffs.getHunkCount(), 3);
+      await store.set(sampleUri, MODIFIED);
+      await diffs.recompute(sampleUri);
+      assert.strictEqual(diffs.getHunkCount(), 2);
+
+      await store.set(sampleUri, ORIGINAL);
+      await diffs.recompute(sampleUri);
+      assert.strictEqual(diffs.getHunkCount(), 1);
+      diffs.recordWholeFileChange(secondUri, "deleted");
+      diffs.recordWholeFileChange(secondUri, "deleted");
+      assert.strictEqual(diffs.getHunkCount(), 0);
+      assert.strictEqual(diffs.hasAgentChanges(), true);
+
+      await diffs.recompute(secondUri);
+      assert.strictEqual(diffs.getHunkCount(), 1);
+      store.failReads = true;
+      await diffs.recompute(secondUri);
+      assert.strictEqual(diffs.getHunkCount(), 0);
+      assert.strictEqual(diffs.hasAgentChanges(), true);
+      store.failReads = false;
+      await diffs.recompute(secondUri);
+      assert.strictEqual(diffs.getHunkCount(), 1);
+      diffs.clear();
+      assert.strictEqual(diffs.getHunkCount(), 0);
+      assert.strictEqual(diffs.hasAgentChanges(), false);
+      assert.deepStrictEqual(countsAtEvents.slice(2), [3, 2, 1, 0, 0, 1, 0, 1, 0]);
+    } finally {
+      subscription.dispose();
+      diffs.dispose();
+      store.clear();
+    }
   });
 
   test("detects a saved change and exposes review actions", async () => {

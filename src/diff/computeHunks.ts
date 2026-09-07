@@ -16,6 +16,10 @@ export function computeHunks(
   baseline: string,
   current: string,
 ): DiffHunk[] {
+  if (baseline === current) {
+    return [];
+  }
+
   const hunks: DiffHunk[] = [];
   let oldLine = 0;
   let newLine = 0;

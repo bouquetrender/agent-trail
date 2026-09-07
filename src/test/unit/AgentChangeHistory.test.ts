@@ -3,6 +3,42 @@ import { AgentChangeHistory } from "../../diff/AgentChangeHistory";
 import { computeHunks } from "../../diff/computeHunks";
 
 suite("AgentChangeHistory", () => {
+  test("refreshes sorted snapshots after writes without changing earlier snapshots", () => {
+    const history = new AgentChangeHistory();
+    const uri = "file:///sample.txt";
+    assert.strictEqual(history.hasChanges(), false);
+    assert.deepStrictEqual(history.getAll(), []);
+
+    history.record({ uri, hunks: computeHunks(uri, "before\n", "after\n") });
+    const first = history.getAll();
+    assert.strictEqual(history.hasChanges(), true);
+    assert.strictEqual(history.getAll(), first);
+
+    history.record({ uri, hunks: computeHunks(uri, "before\n", "latest\n") });
+    assert.strictEqual(history.getAll()[0].hunks[0].currentText, "latest\n");
+    assert.strictEqual(first[0].hunks[0].currentText, "after\n");
+
+    history.recordWholeFile(uri, "deleted");
+    history.recordWholeFile(uri, "added");
+    history.recordWholeFile("file:///a.txt", "added");
+    assert.deepStrictEqual(
+      history.getAll().map((change) => [change.uri, change.kind]),
+      [
+        ["file:///a.txt", "added"],
+        [uri, "modified"],
+        [uri, "added"],
+        [uri, "deleted"],
+      ],
+    );
+
+    history.clear();
+    assert.strictEqual(history.hasChanges(), false);
+    assert.deepStrictEqual(history.getAll(), []);
+    history.recordWholeFile(uri, "added");
+    assert.strictEqual(history.hasChanges(), true);
+    assert.strictEqual(history.getAll().length, 1);
+  });
+
   test("replaces the hunk at the same line and retains other locations", () => {
     const uri = "file:///sample.txt";
     const baseline = "one\ntwo\nthree\nfour\n";

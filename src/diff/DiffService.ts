@@ -7,6 +7,7 @@ import { computeHunks } from "./computeHunks";
 export class DiffService implements vscode.Disposable {
   private readonly fileDiffs = new Map<string, FileDiff>();
   private readonly history = new AgentChangeHistory();
+  private hunkCount = 0;
   private readonly changeEmitter = new vscode.EventEmitter<void>();
 
   readonly onDidChange = this.changeEmitter.event;
@@ -27,9 +28,17 @@ export class DiffService implements vscode.Disposable {
     return this.history.getAll();
   }
 
+  getHunkCount(): number {
+    return this.hunkCount;
+  }
+
+  hasAgentChanges(): boolean {
+    return this.history.hasChanges();
+  }
+
   recordWholeFileChange(uri: vscode.Uri, kind: "added" | "deleted"): void {
     if (kind === "deleted") {
-      this.fileDiffs.delete(uri.toString());
+      this.updateFileDiff(uri.toString(), undefined);
     }
     this.history.recordWholeFile(uri.toString(), kind);
     this.changeEmitter.fire();
@@ -56,15 +65,15 @@ export class DiffService implements vscode.Disposable {
       const document = await vscode.workspace.openTextDocument(uri);
       const hunks = computeHunks(uri.toString(), baseline, document.getText());
       if (hunks.length === 0) {
-        this.fileDiffs.delete(uri.toString());
+        this.updateFileDiff(uri.toString(), undefined);
       } else {
         const fileDiff = { uri: uri.toString(), hunks };
-        this.fileDiffs.set(uri.toString(), fileDiff);
+        this.updateFileDiff(uri.toString(), fileDiff);
         this.history.record(fileDiff);
       }
     } catch {
       // Lifecycle history is recorded before unreadable files leave the reviewable set.
-      this.fileDiffs.delete(uri.toString());
+      this.updateFileDiff(uri.toString(), undefined);
     }
 
     this.changeEmitter.fire();
@@ -75,15 +84,26 @@ export class DiffService implements vscode.Disposable {
   }
 
   clear(): void {
-    if (this.fileDiffs.size === 0 && this.history.getAll().length === 0) {
+    if (this.fileDiffs.size === 0 && !this.history.hasChanges()) {
       return;
     }
     this.fileDiffs.clear();
+    this.hunkCount = 0;
     this.history.clear();
     this.changeEmitter.fire();
   }
 
   dispose(): void {
     this.changeEmitter.dispose();
+  }
+
+  private updateFileDiff(uri: string, fileDiff: FileDiff | undefined): void {
+    this.hunkCount -= this.fileDiffs.get(uri)?.hunks.length ?? 0;
+    if (fileDiff) {
+      this.fileDiffs.set(uri, fileDiff);
+      this.hunkCount += fileDiff.hunks.length;
+    } else {
+      this.fileDiffs.delete(uri);
+    }
   }
 }

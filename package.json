@@ -2,7 +2,7 @@
   "name": "cursor-forgery",
   "displayName": "cursor-forgery",
   "description": "Emulate Cursor-style editor interactions for Codex context and agent change review.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "local",
   "author": "liujw",
   "repository": {
@@ -75,6 +75,10 @@
         "command": "cursorForgery.rejectAll",
         "title": "Agent Review: Reject All",
         "icon": "$(trash)"
+      },
+      {
+        "command": "cursorForgery.addToCodexThread",
+        "title": "Add to Codex Thread"
       }
     ],
     "views": {
@@ -92,6 +96,19 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "cursorForgery.addToCodexThread",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "cursorForgery.addToCodexThread",
+          "when": "resourceScheme == file",
+          "group": "4_search@10"
+        }
+      ],
       "view/title": [
         {
           "command": "cursorForgery.acceptAll",

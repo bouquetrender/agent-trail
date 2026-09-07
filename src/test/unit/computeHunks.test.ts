@@ -2,6 +2,12 @@ import * as assert from "assert";
 import { computeHunks, mergeAcceptedHunk } from "../../diff/computeHunks";
 
 suite("computeHunks", () => {
+  test("returns no hunks for identical text including empty and mixed line endings", () => {
+    for (const text of ["", "one", "one\n", "one\r\ntwo\n", "文字\n".repeat(10000)]) {
+      assert.deepStrictEqual(computeHunks("file:///sample.txt", text, text), []);
+    }
+  });
+
   test("creates independent hunks for separated line changes", () => {
     const baseline = "one\ntwo\nthree\nfour\n";
     const current = "ONE\ntwo\nthree\nFOUR\n";

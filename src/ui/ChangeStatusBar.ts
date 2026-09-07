@@ -22,9 +22,7 @@ export class ChangeStatusBar implements vscode.Disposable {
   }
 
   private update(): void {
-    const count = this.diffs
-      .getAll()
-      .reduce((total, fileDiff) => total + fileDiff.hunks.length, 0);
+    const count = this.diffs.getHunkCount();
     this.item.text = `$(diff) Agent Changes: ${count}`;
   }
 }

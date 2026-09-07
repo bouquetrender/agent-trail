@@ -9,8 +9,14 @@ const CHANGE_KIND_ORDER: Readonly<Record<AgentFileChange["kind"], number>> = {
 export class AgentChangeHistory {
   private readonly hunksByUri = new Map<string, Map<number, DiffHunk>>();
   private readonly wholeFileChanges = new Map<string, AgentFileChange>();
+  private sortedChanges: readonly AgentFileChange[] | undefined;
+
+  hasChanges(): boolean {
+    return this.hunksByUri.size > 0 || this.wholeFileChanges.size > 0;
+  }
 
   record(fileDiff: FileDiff): void {
+    this.sortedChanges = undefined;
     let hunks = this.hunksByUri.get(fileDiff.uri);
     if (!hunks) {
       hunks = new Map<number, DiffHunk>();
@@ -23,6 +29,7 @@ export class AgentChangeHistory {
   }
 
   recordWholeFile(uri: string, kind: "added" | "deleted"): void {
+    this.sortedChanges = undefined;
     this.wholeFileChanges.set(`${kind}:${uri}`, { uri, kind, hunks: [] });
   }
 
@@ -31,6 +38,10 @@ export class AgentChangeHistory {
   }
 
   getAll(): readonly AgentFileChange[] {
+    if (this.sortedChanges) {
+      return this.sortedChanges;
+    }
+
     const modified = [...this.hunksByUri.entries()]
       .map(([uri, hunks]) => ({
         uri,
@@ -40,21 +51,29 @@ export class AgentChangeHistory {
             a.newStartLine - b.newStartLine || a.id.localeCompare(b.id),
         ),
       }));
-    return [...modified, ...this.wholeFileChanges.values()].sort(
+    this.sortedChanges = [...modified, ...this.wholeFileChanges.values()].sort(
       (a, b) =>
         a.uri.localeCompare(b.uri) ||
         CHANGE_KIND_ORDER[a.kind] - CHANGE_KIND_ORDER[b.kind],
     );
+    return this.sortedChanges;
   }
 
   getHunk(uri: string, hunkId: string): DiffHunk | undefined {
-    return [...(this.hunksByUri.get(uri)?.values() ?? [])].find(
-      (hunk) => hunk.id === hunkId,
-    );
+    const hunks = this.hunksByUri.get(uri);
+    if (hunks) {
+      for (const hunk of hunks.values()) {
+        if (hunk.id === hunkId) {
+          return hunk;
+        }
+      }
+    }
+    return undefined;
   }
 
   clear(): void {
     this.hunksByUri.clear();
     this.wholeFileChanges.clear();
+    this.sortedChanges = undefined;
   }
 }
