@@ -7,6 +7,8 @@ const WATCH_DEBOUNCE_MS = 250;
 const DOCUMENT_ORIGIN_DELAY_MS = 100;
 const EXTERNAL_CHANGE_WINDOW_MS = 500;
 
+export type ReviewSessionState = "inactive" | "capturing" | "ready";
+
 export class ReviewSession implements vscode.Disposable {
   private watcher: vscode.FileSystemWatcher | undefined;
   private readonly timers = new Map<string, NodeJS.Timeout>();
@@ -18,8 +20,11 @@ export class ReviewSession implements vscode.Disposable {
   private readonly baselineChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
   private readonly documentChangeSubscription: vscode.Disposable;
   private active = false;
+  private state: ReviewSessionState = "inactive";
+  private readonly stateChangeEmitter = new vscode.EventEmitter<ReviewSessionState>();
 
   readonly onDidAdvanceBaseline = this.baselineChangeEmitter.event;
+  readonly onDidChangeState = this.stateChangeEmitter.event;
 
   constructor(
     private readonly baselineStore: BaselineStore,
@@ -34,6 +39,10 @@ export class ReviewSession implements vscode.Disposable {
     return this.active;
   }
 
+  getState(): ReviewSessionState {
+    return this.state;
+  }
+
   async start(
     report?: (message: string) => void,
   ): Promise<{ fileCount: number; kind: "git" | "memory" }> {
@@ -43,30 +52,37 @@ export class ReviewSession implements vscode.Disposable {
     }
 
     this.stopWatcher();
+    this.setState("capturing");
     this.diffs.clear();
-    await this.baselineStore.capture({ report });
-    await Promise.all(
-      vscode.workspace.textDocuments
-        .filter(
-          (document) =>
-            document.uri.scheme === "file" &&
-            document.isDirty &&
-            this.baselineStore.has(document.uri),
-        )
-        .map((document) =>
-          this.baselineStore.set(document.uri, document.getText()),
-        ),
-    );
-    this.active = true;
-    report?.("Starting filesystem watcher…");
-    this.watcher = vscode.workspace.createFileSystemWatcher("**/*");
-    this.watcher.onDidCreate((uri) => this.handleFileSystemCreate(uri));
-    this.watcher.onDidChange((uri) => this.handleFileSystemChange(uri));
-    this.watcher.onDidDelete((uri) => this.handleFileSystemDelete(uri));
-    return {
-      fileCount: this.baselineStore.uris().length,
-      kind: this.baselineStore.kind,
-    };
+    try {
+      await this.baselineStore.capture({ report });
+      await Promise.all(
+        vscode.workspace.textDocuments
+          .filter(
+            (document) =>
+              document.uri.scheme === "file" &&
+              document.isDirty &&
+              this.baselineStore.has(document.uri),
+          )
+          .map((document) =>
+            this.baselineStore.set(document.uri, document.getText()),
+          ),
+      );
+      report?.("Starting filesystem watcher…");
+      this.watcher = vscode.workspace.createFileSystemWatcher("**/*");
+      this.watcher.onDidCreate((uri) => this.handleFileSystemCreate(uri));
+      this.watcher.onDidChange((uri) => this.handleFileSystemChange(uri));
+      this.watcher.onDidDelete((uri) => this.handleFileSystemDelete(uri));
+      this.active = true;
+      this.setState("ready");
+      return {
+        fileCount: this.baselineStore.uris().length,
+        kind: this.baselineStore.kind,
+      };
+    } catch (error) {
+      this.stopWatcher();
+      throw error;
+    }
   }
 
   async recompute(uri: vscode.Uri): Promise<void> {
@@ -92,6 +108,7 @@ export class ReviewSession implements vscode.Disposable {
     this.stopWatcher();
     this.documentChangeSubscription.dispose();
     this.baselineChangeEmitter.dispose();
+    this.stateChangeEmitter.dispose();
     this.diffs.dispose();
     this.baselineStore.clear();
   }
@@ -245,6 +262,12 @@ export class ReviewSession implements vscode.Disposable {
     this.internalEdits.clear();
     this.externalChangeTimes.clear();
     this.active = false;
+    this.setState("inactive");
+  }
+
+  private setState(state: ReviewSessionState): void {
+    this.state = state;
+    this.stateChangeEmitter.fire(state);
   }
 }
 

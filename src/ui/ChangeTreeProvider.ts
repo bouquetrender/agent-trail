@@ -4,13 +4,17 @@ import type { AgentFileChangeKind, DiffHunk, FileDiff } from "../model";
 
 export class CurrentTurnItem extends vscode.TreeItem {
   constructor() {
-    super("Current Turn", vscode.TreeItemCollapsibleState.Expanded);
+    super("Pending Review", vscode.TreeItemCollapsibleState.Expanded);
+    this.id = "pending";
   }
 }
 
 export class AllAgentChangesItem extends vscode.TreeItem {
   constructor() {
-    super("All Agent Changes", vscode.TreeItemCollapsibleState.Collapsed);
+    super("History", vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = "history";
+    this.description = "Reference only";
+    this.tooltip = "Recorded changes from this session, including reviewed changes. Opens the current file; historical line positions may have shifted.";
   }
 }
 
@@ -32,6 +36,7 @@ export class FileChangeItem extends vscode.TreeItem {
     this.contextValue = reviewable
       ? "cursorForgery.file"
       : "cursorForgery.historyFile";
+    this.id = `${reviewable ? "pending" : "history"}:${kind}:${uri.toString()}`;
     this.resourceUri = uri;
     if (kind === "modified") {
       this.description = `${fileDiff.hunks.length} hunk${
@@ -42,12 +47,17 @@ export class FileChangeItem extends vscode.TreeItem {
       this.description = kind === "added" ? "Added" : "Deleted";
       this.tooltip = `${uri.fsPath} (${this.description})`;
     }
+    if (!reviewable) {
+      this.tooltip = `${this.tooltip}\nReference only. Opens the current file; historical line positions may have shifted.`;
+    } else {
+      this.tooltip = `${this.tooltip}\nAccept advances the review baseline; editor Undo cannot undo acceptance.`;
+    }
     const firstHunk = fileDiff.hunks[0];
     if (firstHunk) {
       this.command = {
         command: "cursorForgery.openHunk",
         title: "Open First Change",
-        arguments: [uri.toString(), firstHunk.id],
+        arguments: [uri.toString(), firstHunk.id, !reviewable],
       };
     }
   }
@@ -65,14 +75,16 @@ export class HunkChangeItem extends vscode.TreeItem {
     this.contextValue = reviewable
       ? "cursorForgery.hunk"
       : "cursorForgery.historyHunk";
+    this.id = `${reviewable ? "pending" : "history"}:${uri.toString()}:${hunk.id}`;
     this.description = summarizeHunk(hunk);
     this.command = {
       command: "cursorForgery.openHunk",
       title: "Open Change",
-      arguments: [uri.toString(), hunk.id],
+      arguments: [uri.toString(), hunk.id, !reviewable],
     };
     if (!reviewable) {
       this.iconPath = new vscode.ThemeIcon("diff");
+      this.tooltip = "Reference only. Opens the current file; historical line positions may have shifted.";
     }
   }
 

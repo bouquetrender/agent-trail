@@ -32,6 +32,10 @@ export class DiffService implements vscode.Disposable {
     return this.hunkCount;
   }
 
+  getFileCount(): number {
+    return this.fileDiffs.size;
+  }
+
   hasAgentChanges(): boolean {
     return this.history.hasChanges();
   }

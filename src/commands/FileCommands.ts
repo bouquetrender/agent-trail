@@ -64,21 +64,56 @@ export class FileCommands {
     }
 
     const edit = new vscode.WorkspaceEdit();
-    await Promise.all(
+    const snapshots = await Promise.all(
       uris.map(async (uri) => {
         const baseline = await this.baselineStore.get(uri);
         if (baseline === undefined) {
-          return;
+          return undefined;
         }
         const document = await vscode.workspace.openTextDocument(uri);
-        edit.replace(uri, fullDocumentRange(document), baseline);
+        return { uri, baseline, document, version: document.version };
       }),
     );
-    if (!(await this.session.applyReviewEdit(edit, uris))) {
+    const reviewable = snapshots.flatMap((snapshot) => snapshot ? [snapshot] : []);
+    if (reviewable.length === 0) {
+      return;
+    }
+    const action = `Reject ${reviewable.length} File${reviewable.length === 1 ? "" : "s"}`;
+    const choice = await vscode.window.showWarningMessage(
+      `Reject all pending changes in ${reviewable.length} file${reviewable.length === 1 ? "" : "s"}?`,
+      {
+        modal: true,
+        detail: "This replaces the current contents of these files with their review baselines.",
+      },
+      action,
+    );
+    if (choice !== action) {
+      return;
+    }
+    const baselines = await Promise.all(
+      reviewable.map(({ uri }) => this.baselineStore.get(uri)),
+    );
+    if (
+      reviewable.some((snapshot, index) =>
+        snapshot.document.version !== snapshot.version ||
+        baselines[index] !== snapshot.baseline ||
+        !this.diffs.get(snapshot.uri),
+      )
+    ) {
+      void vscode.window.showWarningMessage(
+        "Files or review baselines changed while confirmation was open. Review the latest changes and try again.",
+      );
+      return;
+    }
+    for (const { uri, baseline, document } of reviewable) {
+      edit.replace(uri, fullDocumentRange(document), baseline);
+    }
+    const reviewedUris = reviewable.map(({ uri }) => uri);
+    if (!(await this.session.applyReviewEdit(edit, reviewedUris))) {
       void vscode.window.showErrorMessage("Agent Review could not reject all changes.");
       return;
     }
-    await Promise.all(uris.map((uri) => this.session.recompute(uri)));
+    await Promise.all(reviewedUris.map((uri) => this.session.recompute(uri)));
   }
 
   private changedUris(): vscode.Uri[] {

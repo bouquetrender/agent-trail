@@ -123,6 +123,7 @@ export class HunkCommands {
   async openHunk(
     target?: HunkCommandTarget | string,
     hunkId?: string,
+    historical = false,
   ): Promise<void> {
     const resolved =
       this.resolveHunk(target, hunkId) ??
@@ -153,6 +154,11 @@ export class HunkCommands {
       new vscode.Range(position, position),
       vscode.TextEditorRevealType.InCenterIfOutsideViewport,
     );
+    if (historical || !this.diffs.getHunk(uri, hunk.id)) {
+      void vscode.window.showInformationMessage(
+        "History is for reference only. Showing the current file; the recorded line position may have shifted.",
+      );
+    }
   }
 
   private resolveHunk(target?: HunkCommandTarget | string, hunkId?: string) {

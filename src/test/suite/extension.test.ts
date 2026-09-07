@@ -6,6 +6,9 @@ import { DiffService } from "../../diff/DiffService";
 import { MemoryBaselineStore } from "../../session/MemoryBaselineStore";
 import { ReviewSession } from "../../session/ReviewSession";
 import { WorkspaceBaselineStore } from "../../session/WorkspaceBaselineStore";
+import { ChangeStatusBar } from "../../ui/ChangeStatusBar";
+import { FileCommands } from "../../commands/FileCommands";
+import { BaselineContentProvider } from "../../ui/BaselineContentProvider";
 import {
   AllAgentChangesItem,
   ChangeTreeProvider,
@@ -90,6 +93,162 @@ suite("Agent Diff Review extension", () => {
     store.clear();
   });
 
+  test("shows session lifecycle and pending file counts in the status bar", async () => {
+    const store = new class extends MemoryBaselineStore {
+      failCapture = false;
+
+      async capture(): Promise<void> {
+        if (this.failCapture) {
+          throw new Error("Capture failed");
+        }
+        await super.capture({ uris: [sampleUri, secondUri] });
+      }
+    }();
+    const diffs = new DiffService(store);
+    const session = new ReviewSession(store, diffs);
+    const items: vscode.StatusBarItem[] = [];
+    const originalCreate = vscode.window.createStatusBarItem;
+    vscode.window.createStatusBarItem = (
+      idOrAlignment?: string | vscode.StatusBarAlignment,
+      alignmentOrPriority?: number,
+      priority?: number,
+    ): vscode.StatusBarItem => {
+      const item = typeof idOrAlignment === "string"
+        ? originalCreate(idOrAlignment, alignmentOrPriority, priority)
+        : originalCreate(idOrAlignment, alignmentOrPriority);
+      items.push(item);
+      return item;
+    };
+    let statusBar: ChangeStatusBar;
+    try {
+      statusBar = new ChangeStatusBar(diffs, session);
+    } finally {
+      vscode.window.createStatusBarItem = originalCreate;
+    }
+    const item = items[0];
+    const states: string[] = [];
+    const subscription = session.onDidChangeState((state) => states.push(state));
+    try {
+      assert.strictEqual(session.getState(), "inactive");
+      assert.match(item.text, /Not started/);
+      assert.strictEqual(item.command, "cursorForgery.startSession");
+      const start = session.start();
+      assert.strictEqual(session.getState(), "capturing");
+      assert.strictEqual(session.isActive(), false);
+      assert.match(item.text, /Capturing baseline/);
+      await start;
+      assert.strictEqual(session.getState(), "ready");
+      assert.strictEqual(session.isActive(), true);
+      assert.strictEqual(item.text, "$(diff) 0 files · 0 changes");
+      assert.strictEqual(item.command, "cursorForgery.changes.focus");
+
+      await store.set(sampleUri, "ALPHA\nbeta\nGAMMA\n");
+      await store.set(secondUri, SECOND_MODIFIED);
+      await diffs.recomputeAll();
+      assert.strictEqual(item.text, "$(diff) 2 files · 3 changes");
+      await store.set(sampleUri, ORIGINAL);
+      await diffs.recompute(sampleUri);
+      assert.strictEqual(item.text, "$(diff) 1 file · 1 change");
+
+      await session.start();
+      assert.strictEqual(item.text, "$(diff) 0 files · 0 changes");
+      store.failCapture = true;
+      await assert.rejects(session.start(), /Capture failed/);
+      assert.strictEqual(session.getState(), "inactive");
+      assert.strictEqual(session.isActive(), false);
+      assert.match(item.text, /Not started/);
+      assert.deepStrictEqual(states, [
+        "inactive", "capturing", "ready",
+        "inactive", "capturing", "ready",
+        "inactive", "capturing", "inactive",
+      ]);
+    } finally {
+      subscription.dispose();
+      statusBar.dispose();
+      session.dispose();
+    }
+  });
+
+  test("canceling bulk rejection preserves files and baselines", async () => {
+    const store = new MemoryBaselineStore();
+    const diffs = new DiffService(store);
+    const session = new ReviewSession(store, diffs);
+    const provider = new BaselineContentProvider(store);
+    const commands = new FileCommands(store, diffs, session, provider);
+    const originalWarning = vscode.window.showWarningMessage;
+    let prompts = 0;
+    vscode.window.showWarningMessage = async () => {
+      prompts += 1;
+      return undefined;
+    };
+    try {
+      await commands.rejectAll();
+      assert.strictEqual(prompts, 0);
+      await store.capture({ uris: [sampleUri] });
+      await store.set(sampleUri, MODIFIED);
+      await diffs.recompute(sampleUri);
+      await commands.rejectAll();
+      assert.strictEqual(prompts, 1);
+      assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), ORIGINAL);
+      assert.strictEqual(await store.get(sampleUri), MODIFIED);
+      assert.strictEqual(diffs.getFileCount(), 1);
+      store.clear();
+      await commands.rejectAll();
+      assert.strictEqual(prompts, 1);
+    } finally {
+      vscode.window.showWarningMessage = originalWarning;
+      provider.dispose();
+      session.dispose();
+    }
+  });
+
+  test("bulk rejection stops when a file or baseline changes during confirmation", async () => {
+    const store = new MemoryBaselineStore();
+    const diffs = new DiffService(store);
+    const session = new ReviewSession(store, diffs);
+    const provider = new BaselineContentProvider(store);
+    const commands = new FileCommands(store, diffs, session, provider);
+    const originalWarning = vscode.window.showWarningMessage;
+    let changedTarget = "document";
+    const warnings: string[] = [];
+    vscode.window.showWarningMessage = async <T extends string | vscode.MessageItem>(
+      message: string,
+      _optionsOrItem?: vscode.MessageOptions | T,
+      ...items: T[]
+    ): Promise<T | undefined> => {
+      warnings.push(message);
+      if (items.length > 0) {
+        if (changedTarget === "document") {
+          const edit = new vscode.WorkspaceEdit();
+          edit.insert(sampleUri, new vscode.Position(0, 0), "new user edit\n");
+          await vscode.workspace.applyEdit(edit);
+        } else {
+          await store.set(sampleUri, "new baseline\n");
+        }
+      }
+      return items[0];
+    };
+    try {
+      await store.capture({ uris: [sampleUri] });
+      await store.set(sampleUri, MODIFIED);
+      await diffs.recompute(sampleUri);
+      await commands.rejectAll();
+      const document = await vscode.workspace.openTextDocument(sampleUri);
+      assert.strictEqual(document.getText(), `new user edit\n${ORIGINAL}`);
+      assert.match(warnings[1], /changed while confirmation was open/);
+
+      changedTarget = "baseline";
+      await commands.rejectAll();
+      assert.strictEqual(document.getText(), `new user edit\n${ORIGINAL}`);
+      assert.strictEqual(await store.get(sampleUri), "new baseline\n");
+      assert.match(warnings[3], /changed while confirmation was open/);
+    } finally {
+      vscode.window.showWarningMessage = originalWarning;
+      provider.dispose();
+      session.dispose();
+    }
+  });
+
   test("keeps pending hunk counts correct across replacements, removals and reset", async () => {
     const store = new class extends MemoryBaselineStore {
       failReads = false;
@@ -161,14 +320,13 @@ suite("Agent Diff Review extension", () => {
       sampleUri,
     );
 
-    assert.strictEqual(lenses.length, 4);
+    assert.strictEqual(lenses.length, 3);
     assert.deepStrictEqual(
       lenses.map((lens) => lens.command?.command),
       [
         "cursorForgery.openHunkDiff",
         "cursorForgery.acceptHunk",
         "cursorForgery.rejectHunk",
-        "cursorForgery.requestHunkChange",
       ],
     );
 
@@ -181,7 +339,7 @@ suite("Agent Diff Review extension", () => {
   test("reset clears agent changes and captures the current files as a new baseline", async () => {
     await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
     await waitForWatcher();
-    assert.strictEqual((await getCodeLenses(sampleUri)).length, 4);
+    assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
 
     await vscode.commands.executeCommand("cursorForgery.resetSession");
 
@@ -193,7 +351,7 @@ suite("Agent Diff Review extension", () => {
 
     await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(ORIGINAL));
     await waitForWatcher();
-    assert.strictEqual((await getCodeLenses(sampleUri)).length, 4);
+    assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
   });
 
   test("separates pending and historical changes and opens their tree rows", async () => {
@@ -216,13 +374,15 @@ suite("Agent Diff Review extension", () => {
       const roots = provider.getChildren();
       assert.strictEqual(roots.length, 2);
       assert.ok(roots[0] instanceof CurrentTurnItem);
-      assert.strictEqual(roots[0].label, "Current Turn");
+      assert.strictEqual(roots[0].label, "Pending Review");
       assert.strictEqual(
         roots[0].collapsibleState,
         vscode.TreeItemCollapsibleState.Expanded,
       );
       assert.ok(roots[1] instanceof AllAgentChangesItem);
-      assert.strictEqual(roots[1].label, "All Agent Changes");
+      assert.strictEqual(roots[1].label, "History");
+      assert.strictEqual(roots[1].description, "Reference only");
+      assert.deepStrictEqual(provider.getChildren().map((item) => item.id), roots.map((item) => item.id));
       assert.strictEqual(
         roots[1].collapsibleState,
         vscode.TreeItemCollapsibleState.Collapsed,
@@ -243,6 +403,10 @@ suite("Agent Diff Review extension", () => {
       assert.ok(sampleFile instanceof FileChangeItem);
       assert.ok(secondFile instanceof FileChangeItem);
       assert.strictEqual(sampleFile.contextValue, "cursorForgery.file");
+      assert.strictEqual(
+        provider.getChildren(roots[0]).find((item) => item.resourceUri?.toString() === sampleUri.toString())?.id,
+        sampleFile.id,
+      );
       assert.strictEqual(
         sampleFile.collapsibleState,
         vscode.TreeItemCollapsibleState.Collapsed,
@@ -328,6 +492,7 @@ suite("Agent Diff Review extension", () => {
           item.uri.toString() === secondUri.toString(),
       );
       assert.ok(rejectedHistoryFile instanceof FileChangeItem);
+      assert.notStrictEqual(rejectedHistoryFile.id, secondFile.id);
       const rejectedHistoryHunks = provider.getChildren(rejectedHistoryFile);
       assert.strictEqual(rejectedHistoryHunks.length, 1);
       assert.strictEqual(
@@ -336,10 +501,23 @@ suite("Agent Diff Review extension", () => {
       );
       const historyCommand = rejectedHistoryHunks[0].command;
       assert.ok(historyCommand?.arguments);
-      await vscode.commands.executeCommand(
-        historyCommand.command,
-        ...historyCommand.arguments,
-      );
+      assert.strictEqual(historyCommand.arguments[2], true);
+      assert.match(String(rejectedHistoryHunks[0].tooltip), /historical line positions may have shifted/);
+      const originalInformation = vscode.window.showInformationMessage;
+      const historyMessages: string[] = [];
+      vscode.window.showInformationMessage = async (message: string) => {
+        historyMessages.push(message);
+        return undefined;
+      };
+      try {
+        await vscode.commands.executeCommand(
+          historyCommand.command,
+          ...historyCommand.arguments,
+        );
+        assert.ok(historyMessages.some((message) => message.includes("recorded line position may have shifted")));
+      } finally {
+        vscode.window.showInformationMessage = originalInformation;
+      }
       assert.strictEqual(
         vscode.window.activeTextEditor?.document.uri.toString(),
         secondUri.toString(),
@@ -490,7 +668,7 @@ suite("Agent Diff Review extension", () => {
   test("user editing a pending file takes ownership of its current state", async () => {
     await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
     await waitForWatcher();
-    assert.strictEqual((await getCodeLenses(sampleUri)).length, 4);
+    assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
     const document = await vscode.workspace.openTextDocument(sampleUri);
     const edit = new vscode.WorkspaceEdit();
     edit.insert(sampleUri, document.positionAt(document.getText().length), "user line\n");
@@ -522,7 +700,7 @@ suite("Agent Diff Review extension", () => {
     const twoHunks = "ALPHA\nbeta\nGAMMA\n";
     await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(twoHunks));
     await waitForWatcher();
-    assert.strictEqual((await getCodeLenses(sampleUri)).length, 8);
+    assert.strictEqual((await getCodeLenses(sampleUri)).length, 6);
 
     await vscode.commands.executeCommand("cursorForgery.rejectFile", sampleUri);
 
@@ -535,8 +713,8 @@ suite("Agent Diff Review extension", () => {
     await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
     await vscode.workspace.fs.writeFile(secondUri, Buffer.from(SECOND_MODIFIED));
     await waitForWatcher();
-    assert.strictEqual((await getCodeLenses(sampleUri)).length, 4);
-    assert.strictEqual((await getCodeLenses(secondUri)).length, 4);
+    assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
+    assert.strictEqual((await getCodeLenses(secondUri)).length, 3);
 
     await vscode.commands.executeCommand("cursorForgery.acceptAll");
 
@@ -554,7 +732,24 @@ suite("Agent Diff Review extension", () => {
     await vscode.workspace.fs.writeFile(secondUri, Buffer.from(SECOND_MODIFIED));
     await waitForWatcher();
 
-    await vscode.commands.executeCommand("cursorForgery.rejectAll");
+    const originalWarning = vscode.window.showWarningMessage;
+    let confirmationMessage = "";
+    vscode.window.showWarningMessage = async <T extends string | vscode.MessageItem>(
+      message: string,
+      optionsOrItem?: vscode.MessageOptions | T,
+      ...items: T[]
+    ): Promise<T | undefined> => {
+      confirmationMessage = message;
+      assert.ok(optionsOrItem && typeof optionsOrItem === "object" && "modal" in optionsOrItem);
+      assert.strictEqual(optionsOrItem.modal, true);
+      return items[0];
+    };
+    try {
+      await vscode.commands.executeCommand("cursorForgery.rejectAll");
+      assert.strictEqual(confirmationMessage, "Reject all pending changes in 2 files?");
+    } finally {
+      vscode.window.showWarningMessage = originalWarning;
+    }
 
     assert.strictEqual(
       (await vscode.workspace.openTextDocument(sampleUri)).getText(),

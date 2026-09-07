@@ -27,7 +27,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const codeLensProvider = new HunkCodeLensProvider(diffs);
   const selectionCodeLensProvider = new SelectionCodeLensProvider();
   const treeProvider = new ChangeTreeProvider(diffs);
-  const statusBar = new ChangeStatusBar(diffs);
+  const statusBar = new ChangeStatusBar(diffs, session);
   const fileCommands = new FileCommands(
     baselineStore,
     diffs,
@@ -37,8 +37,49 @@ export function activate(context: vscode.ExtensionContext): void {
   const baselineChangeSubscription = session.onDidAdvanceBaseline((uri) =>
     baselineProvider.refresh(uri),
   );
+  const treeView = vscode.window.createTreeView("cursorForgery.changes", {
+    treeDataProvider: treeProvider,
+    showCollapseAll: true,
+  });
+  let previousState: string | undefined;
+  let previousHasPending: boolean | undefined;
+  let previousActiveFileHasPending: boolean | undefined;
+  const updateReviewUi = (): void => {
+    const state = session.getState();
+    const hasPending = state === "ready" && diffs.getFileCount() > 0;
+    if (state !== previousState) {
+      previousState = state;
+      void vscode.commands.executeCommand(
+        "setContext", "cursorForgery.sessionState", state,
+      );
+    }
+    if (hasPending !== previousHasPending) {
+      previousHasPending = hasPending;
+      void vscode.commands.executeCommand(
+        "setContext", "cursorForgery.hasPendingChanges", hasPending,
+      );
+    }
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const activeFileHasPending =
+      hasPending && activeUri !== undefined && diffs.get(activeUri) !== undefined;
+    if (activeFileHasPending !== previousActiveFileHasPending) {
+      previousActiveFileHasPending = activeFileHasPending;
+      void vscode.commands.executeCommand(
+        "setContext", "cursorForgery.activeFileHasPendingChanges", activeFileHasPending,
+      );
+    }
+    treeView.message = state === "ready" && !hasPending && diffs.hasAgentChanges()
+      ? "No pending changes. Session history is available below."
+      : undefined;
+  };
+  const stateSubscription = session.onDidChangeState(updateReviewUi);
+  const pendingSubscription = diffs.onDidChange(updateReviewUi);
+  const activeEditorSubscription = vscode.window.onDidChangeActiveTextEditor(
+    updateReviewUi,
+  );
+  updateReviewUi();
   let sessionStartInProgress = false;
-  const startSession = async (isReset = false): Promise<void> => {
+  const startSession = async (isReset = false, automatic = false): Promise<void> => {
     if (sessionStartInProgress) {
       void vscode.window.showInformationMessage(
         "Agent Review is already capturing a baseline.",
@@ -48,18 +89,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
     sessionStartInProgress = true;
     try {
-      const result = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `${isReset ? "Resetting" : "Starting"} Agent Review session`,
-          cancellable: false,
-        },
-        (_progress, _token) =>
-          session.start((message) => _progress.report({ message })),
-      );
-      void vscode.window.showInformationMessage(
-        `Agent Review session ${isReset ? "reset" : "started"} with ${result.fileCount} files using a ${result.kind} baseline.`,
-      );
+      const result = automatic
+        ? await session.start()
+        : await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `${isReset ? "Resetting" : "Starting"} Agent Review session`,
+              cancellable: false,
+            },
+            (_progress, _token) =>
+              session.start((message) => _progress.report({ message })),
+          );
+      if (!automatic) {
+        void vscode.window.showInformationMessage(
+          `Agent Review session ${isReset ? "reset" : "started"} with ${result.fileCount} files using a ${result.kind} baseline.`,
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       void vscode.window.showErrorMessage(message);
@@ -89,10 +134,10 @@ export function activate(context: vscode.ExtensionContext): void {
     treeProvider,
     statusBar,
     baselineChangeSubscription,
-    vscode.window.createTreeView("cursorForgery.changes", {
-      treeDataProvider: treeProvider,
-      showCollapseAll: true,
-    }),
+    stateSubscription,
+    pendingSubscription,
+    activeEditorSubscription,
+    treeView,
     vscode.workspace.registerTextDocumentContentProvider(
       BASELINE_SCHEME,
       baselineProvider,
@@ -105,7 +150,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { scheme: "file" },
       selectionCodeLensProvider,
     ),
-    vscode.commands.registerCommand("cursorForgery.startSession", startSession),
+    vscode.commands.registerCommand("cursorForgery.startSession", () => startSession()),
     vscode.commands.registerCommand("cursorForgery.resetSession", () =>
       startSession(true),
     ),
@@ -127,7 +172,8 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand(
       "cursorForgery.openHunk",
-      (target, hunkId) => hunkCommands.openHunk(target, hunkId),
+      (target, hunkId, historical) =>
+        hunkCommands.openHunk(target, hunkId, historical),
     ),
     vscode.commands.registerCommand("cursorForgery.acceptFile", (target) =>
       fileCommands.acceptFile(target),
@@ -148,7 +194,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   if (vscode.workspace.workspaceFolders?.length) {
-    void startSession();
+    void startSession(false, true);
   }
 }
 

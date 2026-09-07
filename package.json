@@ -26,12 +26,14 @@
     "commands": [
       {
         "command": "cursorForgery.startSession",
-        "title": "Agent Review: Start Session"
+        "title": "Agent Review: Start Session",
+        "enablement": "cursorForgery.sessionState != capturing"
       },
       {
         "command": "cursorForgery.resetSession",
         "title": "Agent Review: Reset Session",
-        "icon": "$(clear-all)"
+        "icon": "$(clear-all)",
+        "enablement": "cursorForgery.sessionState == ready"
       },
       {
         "command": "cursorForgery.acceptHunk",
@@ -69,12 +71,14 @@
       {
         "command": "cursorForgery.acceptAll",
         "title": "Agent Review: Accept All",
-        "icon": "$(check-all)"
+        "icon": "$(check-all)",
+        "enablement": "cursorForgery.hasPendingChanges"
       },
       {
         "command": "cursorForgery.rejectAll",
         "title": "Agent Review: Reject All",
-        "icon": "$(trash)"
+        "icon": "$(trash)",
+        "enablement": "cursorForgery.hasPendingChanges"
       },
       {
         "command": "cursorForgery.addToCodexThread",
@@ -92,10 +96,45 @@
     "viewsWelcome": [
       {
         "view": "cursorForgery.changes",
-        "contents": "No pending agent changes."
+        "contents": "Start a session to watch for agent changes.\n[Start Session](command:cursorForgery.startSession)",
+        "when": "cursorForgery.sessionState != capturing && cursorForgery.sessionState != ready && workspaceFolderCount > 0"
+      },
+      {
+        "view": "cursorForgery.changes",
+        "contents": "Open a workspace folder to start reviewing agent changes.\n[Open Folder](command:vscode.openFolder)",
+        "when": "workspaceFolderCount == 0"
+      },
+      {
+        "view": "cursorForgery.changes",
+        "contents": "Capturing the review baseline… File changes will be monitored when capture finishes.",
+        "when": "cursorForgery.sessionState == capturing"
+      },
+      {
+        "view": "cursorForgery.changes",
+        "contents": "No pending changes. Agent Review is watching for changes.",
+        "when": "cursorForgery.sessionState == ready"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "cursorForgery.moreReviewActions",
+        "label": "More Review Actions"
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "submenu": "cursorForgery.moreReviewActions",
+          "when": "resourceScheme == file && cursorForgery.activeFileHasPendingChanges",
+          "group": "9_cutcopypaste@10"
+        }
+      ],
+      "cursorForgery.moreReviewActions": [
+        {
+          "command": "cursorForgery.requestHunkChange",
+          "group": "1_review"
+        }
+      ],
       "commandPalette": [
         {
           "command": "cursorForgery.addToCodexThread",
@@ -112,21 +151,26 @@
       "view/title": [
         {
           "command": "cursorForgery.acceptAll",
-          "when": "view == cursorForgery.changes",
+          "when": "view == cursorForgery.changes && cursorForgery.hasPendingChanges",
           "group": "navigation@1"
         },
         {
           "command": "cursorForgery.rejectAll",
-          "when": "view == cursorForgery.changes",
+          "when": "view == cursorForgery.changes && cursorForgery.hasPendingChanges",
           "group": "navigation@2"
         },
         {
           "command": "cursorForgery.resetSession",
-          "when": "view == cursorForgery.changes",
+          "when": "view == cursorForgery.changes && cursorForgery.sessionState == ready",
           "group": "navigation@3"
         }
       ],
       "view/item/context": [
+        {
+          "submenu": "cursorForgery.moreReviewActions",
+          "when": "view == cursorForgery.changes && viewItem == cursorForgery.hunk",
+          "group": "1_review"
+        },
         {
           "command": "cursorForgery.acceptFile",
           "when": "view == cursorForgery.changes && viewItem == cursorForgery.file",
