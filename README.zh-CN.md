@@ -21,6 +21,19 @@
 
 空视图区分未启动、正在捕获基线、已就绪且没有待审查变更。仅存在待审查变更时显示批量接受和拒绝按钮。状态栏显示待审查文件数和变更数；自动启动通过状态栏反馈捕获状态，不弹出成功通知，失败仍会通知。
 
+## Agent Lens Session / Timeline
+
+**SESSION TIMELINE** 按会话展示事件，并按时间升序排列；同一时间的事件保持记录顺序。
+基线捕获完成后自动开始 Agent Session。运行 Start / Reset 会结束旧 Session、捕获新基线并开始新 Session；旧 Timeline 保留，原有 Diff Review 的 History 仍按原规则重置。
+
+运行 **Agent Lens: End Agent Session** 或点击 Timeline 的停止按钮可结束事件记录。结束前会处理已经观察到的文件事件；结束后 Diff Review、Accept、Reject 和 History 仍然可用。再次运行 Start / Reset 可以开始下一次记录，同时重置审查基线。
+
+本阶段 Session 和 Event 仅保存在内存，重载窗口后清空。Agent / provider 默认是 `unknown`，不会根据文件变化猜测身份。文件事件为 `source: filesystem`、`confidence: observed`，仅表示插件观察到了文件系统变化；保存用户编辑、构建工具等也可能产生这些事件。未保存的编辑不产生文件系统事件，仍按原有规则推进用户基线。
+
+开发模型位于 `src/session/AgentSession.ts`。`SessionManager` 提供 `startSession`、`recordEvent`、`endSession`、`getCurrentSession`、`getSession` 和 `getSessions`；`EventStore.getEvents(sessionId)` 返回有序只读事件快照。时间戳使用 Unix 毫秒，结束的会话不再接受新事件。支持七种事件：`session-start/end`、`file-created/modified/deleted`、`command-start/end`，以及 `observed`、`reported`、`inferred` 三种可信来源标记。命令事件目前仅提供强类型记录接口，尚未接入终端监听或 Agent 上报传输。
+
+`FileChangeCollector` 采集工作区 UTF-8 文本文件的文件系统通知，继续驱动已有差异计算和整文件 History，同时写入事件。它不改变接受/拒绝语义，也不把文件通知作为 Agent 身份证据。Timeline 记录监听器实际收到的通知，操作系统合并的底层写入无法逐次还原。
+
 ## 审查操作
 
 - `Accept`：保留当前代码，并推进基线；编辑器撤销无法撤销接受操作。
@@ -39,6 +52,8 @@
 ## 命令
 
 - `Agent Review: Start Session`
+- `Agent Review: Reset Session`
+- `Agent Lens: End Agent Session`
 - `Agent Review: Open Change`
 - `Agent Review: View Before ↔ After`
 - `Agent Review: Accept Hunk`
@@ -67,4 +82,4 @@ npm run test:integration
 - 暂不支持二进制和非 UTF-8 文件。
 - Git 工作区使用隔离的临时环境，不会修改真实索引或暂存区。
 - 非 Git 和多根工作区使用内存基线。
-- 直接写入文件系统视为 Agent 修改；使 VS Code 文档变为未保存状态的操作视为用户修改。
+- Diff Review 继续将直接文件系统修改纳入待审查；使 VS Code 文档变为未保存状态的操作视为用户修改。Timeline 独立记录文件系统观察，不确认操作主体。

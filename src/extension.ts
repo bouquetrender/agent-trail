@@ -12,6 +12,7 @@ import { HunkCodeLensProvider } from "./ui/HunkCodeLensProvider";
 import { SelectionCodeLensProvider } from "./ui/SelectionCodeLensProvider";
 import { ChangeTreeProvider } from "./ui/ChangeTreeProvider";
 import { ChangeStatusBar } from "./ui/ChangeStatusBar";
+import { SessionTimelineProvider } from "./ui/SessionTimelineProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
   const baselineStore = new WorkspaceBaselineStore();
@@ -28,6 +29,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const selectionCodeLensProvider = new SelectionCodeLensProvider();
   const treeProvider = new ChangeTreeProvider(diffs);
   const statusBar = new ChangeStatusBar(diffs, session);
+  const timelineProvider = new SessionTimelineProvider(session.agentSessions);
+  const timelineView = vscode.window.createTreeView("cursorForgery.timeline", {
+    treeDataProvider: timelineProvider,
+    showCollapseAll: true,
+  });
+  timelineView.message = "Memory only. Filesystem events do not identify the actor.";
+  const updateAgentSessionUi = (): void => {
+    void vscode.commands.executeCommand(
+      "setContext", "cursorForgery.agentSessionActive",
+      session.agentSessions.getCurrentSession() !== undefined,
+    );
+  };
+  const agentSessionSubscription = session.agentSessions.onDidChange(updateAgentSessionUi);
+  updateAgentSessionUi();
   const fileCommands = new FileCommands(
     baselineStore,
     diffs,
@@ -133,6 +148,9 @@ export function activate(context: vscode.ExtensionContext): void {
     selectionCodeLensProvider,
     treeProvider,
     statusBar,
+    timelineProvider,
+    timelineView,
+    agentSessionSubscription,
     baselineChangeSubscription,
     stateSubscription,
     pendingSubscription,
@@ -149,6 +167,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerCodeLensProvider(
       { scheme: "file" },
       selectionCodeLensProvider,
+    ),
+    vscode.commands.registerCommand("cursorForgery.endAgentSession", () =>
+      session.endAgentSession(),
     ),
     vscode.commands.registerCommand("cursorForgery.startSession", () => startSession()),
     vscode.commands.registerCommand("cursorForgery.resetSession", () =>

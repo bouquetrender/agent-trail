@@ -19,11 +19,18 @@
     "onStartupFinished",
     "onCommand:cursorForgery.startSession",
     "onCommand:cursorForgery.resetSession",
-    "onView:cursorForgery.changes"
+    "onView:cursorForgery.changes",
+    "onView:cursorForgery.timeline"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "cursorForgery.endAgentSession",
+        "title": "Agent Lens: End Agent Session",
+        "icon": "$(debug-stop)",
+        "enablement": "cursorForgery.agentSessionActive && cursorForgery.sessionState == ready"
+      },
       {
         "command": "cursorForgery.startSession",
         "title": "Agent Review: Start Session",
@@ -90,6 +97,10 @@
         {
           "id": "cursorForgery.changes",
           "name": "AGENT CHANGES"
+        },
+        {
+          "id": "cursorForgery.timeline",
+          "name": "SESSION TIMELINE"
         }
       ]
     },
@@ -149,6 +160,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "cursorForgery.endAgentSession",
+          "when": "view == cursorForgery.timeline && cursorForgery.agentSessionActive && cursorForgery.sessionState == ready",
+          "group": "navigation@1"
+        },
         {
           "command": "cursorForgery.acceptAll",
           "when": "view == cursorForgery.changes && cursorForgery.hasPendingChanges",

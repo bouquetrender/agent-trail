@@ -5,6 +5,10 @@ import * as vscode from "vscode";
 import { DiffService } from "../../diff/DiffService";
 import { MemoryBaselineStore } from "../../session/MemoryBaselineStore";
 import { ReviewSession } from "../../session/ReviewSession";
+import { EventStore } from "../../session/EventStore";
+import { SessionManager } from "../../session/SessionManager";
+import { FileChangeCollector } from "../../session/FileChangeCollector";
+import { AgentEventItem, AgentSessionItem, SessionTimelineProvider } from "../../ui/SessionTimelineProvider";
 import { WorkspaceBaselineStore } from "../../session/WorkspaceBaselineStore";
 import { ChangeStatusBar } from "../../ui/ChangeStatusBar";
 import { FileCommands } from "../../commands/FileCommands";
@@ -50,6 +54,7 @@ suite("Agent Diff Review extension", () => {
     for (const command of [
       "cursorForgery.startSession",
       "cursorForgery.resetSession",
+      "cursorForgery.endAgentSession",
       "cursorForgery.openHunk",
       "cursorForgery.openHunkDiff",
       "cursorForgery.acceptHunk",
@@ -542,6 +547,8 @@ suite("Agent Diff Review extension", () => {
 
     try {
       await session.start();
+      const agentSessionId = session.agentSessions.getCurrentSession()?.id;
+      assert.ok(agentSessionId);
       await vscode.workspace.fs.writeFile(createdUri, Buffer.from("first\n"));
       await waitForWatcher();
       await vscode.workspace.fs.writeFile(createdUri, Buffer.from("second\n"));
@@ -566,6 +573,11 @@ suite("Agent Diff Review extension", () => {
       await waitForWatcher();
 
       assert.deepStrictEqual(provider.getChildren(rootsAfterCreate[0]), []);
+      const events = session.agentSessions.getSession(agentSessionId)?.events ?? [];
+      assert.deepStrictEqual(
+        events.filter((event) => "uri" in event.payload && event.payload.uri === createdUri.toString()).map((event) => event.type),
+        ["file-created", "file-modified", "file-deleted"],
+      );
       const lifecycleFiles = provider.getChildren(rootsAfterCreate[1]);
       assert.deepStrictEqual(
         lifecycleFiles.map((item) =>
@@ -630,6 +642,153 @@ suite("Agent Diff Review extension", () => {
     }
   });
 
+  test("keeps Timeline after end and reset while Diff Review remains usable", async function () {
+    this.timeout(10_000);
+    const store = new MemoryBaselineStore();
+    const diffs = new DiffService(store);
+    const session = new ReviewSession(store, diffs);
+    const timeline = new SessionTimelineProvider(session.agentSessions);
+    const baselineProvider = new BaselineContentProvider(store);
+    const commands = new FileCommands(store, diffs, session, baselineProvider);
+    let refreshes = 0;
+    const subscription = timeline.onDidChangeTreeData(() => refreshes++);
+    try {
+      await session.start();
+      const firstId = session.agentSessions.getCurrentSession()?.id;
+      assert.ok(firstId);
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+      await waitForWatcher();
+      assert.ok(diffs.get(sampleUri));
+      const root = timeline.getChildren()[0];
+      assert.ok(root instanceof AgentSessionItem);
+      const fileEvents = timeline.getChildren(root).filter((item) =>
+        item instanceof AgentEventItem && item.event.type === "file-modified" &&
+        item.event.payload.uri === sampleUri.toString(),
+      );
+      assert.ok(fileEvents.length > 0);
+      const item = fileEvents[0];
+      assert.ok(item instanceof AgentEventItem);
+      assert.strictEqual(item.event.source, "filesystem");
+      assert.strictEqual(item.event.confidence, "observed");
+      assert.match(String(item.tooltip), /actor is unknown/);
+      await session.endAgentSession();
+      assert.strictEqual(session.isActive(), true);
+      assert.strictEqual(session.getState(), "ready");
+      assert.strictEqual(session.agentSessions.getCurrentSession(), undefined);
+      const ended = session.agentSessions.getSession(firstId);
+      assert.ok(ended);
+      assert.strictEqual(ended.events[ended.events.length - 1].type, "session-end");
+      await commands.acceptFile(sampleUri);
+      assert.strictEqual(await store.get(sampleUri), MODIFIED);
+      assert.strictEqual(diffs.get(sampleUri), undefined);
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(ORIGINAL));
+      await waitForWatcher();
+      assert.ok(diffs.get(sampleUri));
+      await commands.rejectFile(sampleUri);
+      assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), MODIFIED);
+      assert.strictEqual(diffs.get(sampleUri), undefined);
+      assert.ok(diffs.hasAgentChanges());
+      assert.deepStrictEqual(session.agentSessions.getSession(firstId), ended);
+      await session.start();
+      assert.notStrictEqual(session.agentSessions.getCurrentSession()?.id, firstId);
+      assert.strictEqual(timeline.getChildren().length, 2);
+      assert.deepStrictEqual(session.agentSessions.getSession(firstId), ended);
+      assert.strictEqual(diffs.hasAgentChanges(), false);
+      assert.ok(refreshes >= 4);
+      const secondId = session.agentSessions.getCurrentSession()?.id;
+      assert.ok(secondId);
+      await session.start();
+      assert.strictEqual(session.agentSessions.getSession(secondId)?.status, "ended");
+      assert.strictEqual(timeline.getChildren().length, 3);
+    } finally {
+      subscription.dispose();
+      timeline.dispose();
+      baselineProvider.dispose();
+      session.dispose();
+    }
+  });
+
+  test("drains observed file events before ending a session", async () => {
+    const store = new MemoryBaselineStore();
+    await store.capture({ uris: [sampleUri] });
+    const diffs = new DiffService(store);
+    const manager = new SessionManager(new EventStore());
+    const collector = new FileChangeCollector(store, diffs, manager, () => {});
+    const created = new vscode.EventEmitter<vscode.Uri>();
+    const changed = new vscode.EventEmitter<vscode.Uri>();
+    const deleted = new vscode.EventEmitter<vscode.Uri>();
+    const originalWatcher = vscode.workspace.createFileSystemWatcher;
+    vscode.workspace.createFileSystemWatcher = () => ({
+      ignoreCreateEvents: false,
+      ignoreChangeEvents: false,
+      ignoreDeleteEvents: false,
+      onDidCreate: created.event,
+      onDidChange: changed.event,
+      onDidDelete: deleted.event,
+      dispose: () => { created.dispose(); changed.dispose(); deleted.dispose(); },
+    });
+    try {
+      const first = manager.startSession({ title: "Draining" });
+      collector.start();
+      changed.fire(sampleUri);
+      const ending = collector.endSession();
+      assert.strictEqual(manager.getCurrentSession()?.id, first.id);
+      await ending;
+      assert.deepStrictEqual(manager.getSession(first.id)?.events.map((event) => event.type),
+        ["session-start", "file-modified", "session-end"]);
+      await collector.stop();
+      const second = manager.startSession({ title: "Next" });
+      assert.deepStrictEqual(manager.getSession(second.id)?.events.map((event) => event.type),
+        ["session-start"]);
+      assert.strictEqual(manager.getSession(first.id)?.events.length, 3);
+    } finally {
+      vscode.workspace.createFileSystemWatcher = originalWatcher;
+      collector.dispose();
+      manager.dispose();
+      diffs.dispose();
+      store.clear();
+    }
+  });
+
+  test("keeps binary, non-UTF-8 and directory changes out of Timeline", async function () {
+    this.timeout(5_000);
+    const binaryUri = vscode.Uri.joinPath(workspaceFolder.uri, "lens-binary.dat");
+    const invalidUri = vscode.Uri.joinPath(workspaceFolder.uri, "lens-invalid.dat");
+    const directoryUri = vscode.Uri.joinPath(workspaceFolder.uri, "lens-empty-directory");
+    const store = new MemoryBaselineStore();
+    const diffs = new DiffService(store);
+    const session = new ReviewSession(store, diffs);
+    try {
+      await session.start();
+      await vscode.workspace.fs.writeFile(binaryUri, Uint8Array.from([0, 1, 2]));
+      await vscode.workspace.fs.writeFile(invalidUri, Uint8Array.from([255, 254]));
+      await vscode.workspace.fs.createDirectory(directoryUri);
+      await waitForWatcher();
+      await vscode.workspace.fs.delete(binaryUri);
+      await vscode.workspace.fs.delete(invalidUri);
+      await vscode.workspace.fs.delete(directoryUri);
+      await waitForWatcher();
+      await session.endAgentSession();
+      const excludedUris = new Set(
+        [binaryUri, invalidUri, directoryUri].map((uri) => uri.toString()),
+      );
+      const events = session.agentSessions.getSessions()[0].events;
+      assert.strictEqual(events[0].type, "session-start");
+      assert.strictEqual(events[events.length - 1].type, "session-end");
+      assert.deepStrictEqual(events.filter((event) =>
+        "uri" in event.payload && excludedUris.has(event.payload.uri),
+      ), []);
+      assert.deepStrictEqual(diffs.getAllAgentChanges().filter((change) =>
+        excludedUris.has(change.uri),
+      ), []);
+    } finally {
+      session.dispose();
+      await deleteIfExists(binaryUri);
+      await deleteIfExists(invalidUri);
+      await deleteIfExists(directoryUri);
+    }
+  });
+
   test("accept updates the baseline without changing the current file", async () => {
     await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
     await waitForWatcher();
@@ -649,6 +808,61 @@ suite("Agent Diff Review extension", () => {
       sampleUri,
     );
     assert.strictEqual(after.length, 0);
+  });
+
+  test("Request Change still selects the hunk for the Codex integration", async () => {
+    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+    await waitForWatcher();
+    const lens = (await getCodeLenses(sampleUri))[1];
+    assert.ok(lens.command?.arguments);
+    let selectedText: string | undefined;
+    const command = vscode.commands.registerCommand("chatgpt.addToThread", () => {
+      const editor = vscode.window.activeTextEditor;
+      selectedText = editor?.document.getText(editor.selection);
+    });
+    const originalGetExtension = vscode.extensions.getExtension;
+    try {
+      vscode.extensions.getExtension = <T>(id: string) => originalGetExtension<T>(
+        id === "openai.chatgpt" ? "local.cursor-forgery" : id,
+      );
+      await vscode.commands.executeCommand(
+        "cursorForgery.requestHunkChange", ...lens.command.arguments,
+      );
+      assert.strictEqual(selectedText, "BETA\n");
+    } finally {
+      vscode.extensions.getExtension = originalGetExtension;
+      command.dispose();
+    }
+  });
+
+  test("distinguishes unsaved user edits from observed filesystem saves", async function () {
+    this.timeout(5_000);
+    await waitForWatcher();
+    const store = new MemoryBaselineStore();
+    const diffs = new DiffService(store);
+    const session = new ReviewSession(store, diffs);
+    try {
+      await session.start();
+      const document = await vscode.workspace.openTextDocument(sampleUri);
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(sampleUri, document.lineAt(1).range, "USER BETA");
+      await vscode.workspace.applyEdit(edit);
+      await waitForUserBaseline();
+      assert.strictEqual(session.agentSessions.getCurrentSession()?.events.length, 1);
+      assert.strictEqual(diffs.get(sampleUri), undefined);
+      await document.save();
+      await waitForWatcher();
+      assert.strictEqual(diffs.get(sampleUri), undefined);
+      const events = session.agentSessions.getCurrentSession()?.events ?? [];
+      const fileEvents = events.filter((event) => event.type === "file-modified");
+      assert.ok(fileEvents.length > 0);
+      assert.ok(fileEvents.every((event) =>
+        event.source === "filesystem" && event.confidence === "observed",
+      ));
+      assert.strictEqual(session.agentSessions.getCurrentSession()?.agent, "unknown");
+    } finally {
+      session.dispose();
+    }
   });
 
   test("does not review edits typed by the user", async () => {

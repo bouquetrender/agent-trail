@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import { DiffService } from "../diff/DiffService";
 import type { BaselineStore } from "./BaselineStore";
-import { readTextFile } from "./readTextFile";
+import { EventStore } from "./EventStore";
+import { FileChangeCollector } from "./FileChangeCollector";
+import { SessionManager } from "./SessionManager";
 
 const WATCH_DEBOUNCE_MS = 250;
 const DOCUMENT_ORIGIN_DELAY_MS = 100;
@@ -10,7 +12,7 @@ const EXTERNAL_CHANGE_WINDOW_MS = 500;
 export type ReviewSessionState = "inactive" | "capturing" | "ready";
 
 export class ReviewSession implements vscode.Disposable {
-  private watcher: vscode.FileSystemWatcher | undefined;
+  private readonly collector: FileChangeCollector;
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly userEditTimers = new Map<string, NodeJS.Timeout>();
   private readonly documentOriginTimers = new Map<string, NodeJS.Timeout>();
@@ -29,7 +31,14 @@ export class ReviewSession implements vscode.Disposable {
   constructor(
     private readonly baselineStore: BaselineStore,
     readonly diffs: DiffService,
+    readonly agentSessions = new SessionManager(new EventStore()),
   ) {
+    this.collector = new FileChangeCollector(
+      baselineStore,
+      diffs,
+      agentSessions,
+      (uri) => this.handleFileSystemChange(uri),
+    );
     this.documentChangeSubscription = vscode.workspace.onDidChangeTextDocument(
       (event) => this.handleDocumentChange(event),
     );
@@ -51,10 +60,12 @@ export class ReviewSession implements vscode.Disposable {
       throw new Error("Open a workspace folder before starting an Agent Review session.");
     }
 
+    const stopping = this.collector.stop();
     this.stopWatcher();
     this.setState("capturing");
-    this.diffs.clear();
     try {
+      await stopping;
+      this.diffs.clear();
       await this.baselineStore.capture({ report });
       await Promise.all(
         vscode.workspace.textDocuments
@@ -69,10 +80,8 @@ export class ReviewSession implements vscode.Disposable {
           ),
       );
       report?.("Starting filesystem watcher…");
-      this.watcher = vscode.workspace.createFileSystemWatcher("**/*");
-      this.watcher.onDidCreate((uri) => this.handleFileSystemCreate(uri));
-      this.watcher.onDidChange((uri) => this.handleFileSystemChange(uri));
-      this.watcher.onDidDelete((uri) => this.handleFileSystemDelete(uri));
+      this.agentSessions.startSession({ title: "Workspace Session" });
+      this.collector.start();
       this.active = true;
       this.setState("ready");
       return {
@@ -80,6 +89,7 @@ export class ReviewSession implements vscode.Disposable {
         kind: this.baselineStore.kind,
       };
     } catch (error) {
+      await this.collector.stop();
       this.stopWatcher();
       throw error;
     }
@@ -104,8 +114,14 @@ export class ReviewSession implements vscode.Disposable {
     }
   }
 
+  async endAgentSession(): Promise<void> {
+    await this.collector.endSession();
+  }
+
   dispose(): void {
+    this.collector.dispose();
     this.stopWatcher();
+    this.agentSessions.dispose();
     this.documentChangeSubscription.dispose();
     this.baselineChangeEmitter.dispose();
     this.stateChangeEmitter.dispose();
@@ -138,36 +154,6 @@ export class ReviewSession implements vscode.Disposable {
   private handleFileSystemChange(uri: vscode.Uri): void {
     this.externalChangeTimes.set(uri.toString(), Date.now());
     this.scheduleRecompute(uri);
-  }
-
-  private handleFileSystemCreate(uri: vscode.Uri): void {
-    if (!this.active || !isReviewableWorkspaceUri(uri)) {
-      return;
-    }
-    if (this.baselineStore.has(uri)) {
-      this.scheduleRecompute(uri);
-      return;
-    }
-    void this.recordAddedFile(uri);
-  }
-
-  private async recordAddedFile(uri: vscode.Uri): Promise<void> {
-    const content = await readTextFile(uri);
-    if (!this.active || content === undefined) {
-      return;
-    }
-    this.diffs.recordWholeFileChange(uri, "added");
-  }
-
-  private handleFileSystemDelete(uri: vscode.Uri): void {
-    if (
-      !this.active ||
-      (!this.baselineStore.has(uri) &&
-        !this.diffs.hasWholeFileChange(uri, "added"))
-    ) {
-      return;
-    }
-    this.diffs.recordWholeFileChange(uri, "deleted");
   }
 
   private handleDocumentChange(event: vscode.TextDocumentChangeEvent): void {
@@ -244,8 +230,6 @@ export class ReviewSession implements vscode.Disposable {
   }
 
   private stopWatcher(): void {
-    this.watcher?.dispose();
-    this.watcher = undefined;
     for (const timer of this.timers.values()) {
       clearTimeout(timer);
     }
@@ -269,18 +253,4 @@ export class ReviewSession implements vscode.Disposable {
     this.state = state;
     this.stateChangeEmitter.fire(state);
   }
-}
-
-function isReviewableWorkspaceUri(uri: vscode.Uri): boolean {
-  if (uri.scheme !== "file") {
-    return false;
-  }
-  const folder = vscode.workspace.getWorkspaceFolder(uri);
-  if (!folder) {
-    return false;
-  }
-  const relativePath = uri.path.slice(folder.uri.path.length + 1);
-  return !relativePath
-    .split("/")
-    .some((segment) => segment === ".git" || segment === "node_modules");
 }

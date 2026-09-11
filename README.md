@@ -34,6 +34,38 @@ there are pending changes. The status bar shows pending file and change counts.
 Automatic startup reports progress there without a success notification; errors
 still show a notification.
 
+## Agent Lens sessions and Timeline
+
+**SESSION TIMELINE** groups events by session in ascending timestamp order, preserving
+insertion order for equal timestamps. An Agent Session starts after baseline capture.
+Start / Reset ends the old session and starts a new one after capturing the next
+baseline. Previous timelines remain available; Diff Review History still resets.
+
+Use **Agent Lens: End Agent Session** or the Timeline stop button to finish recording.
+Already observed events are drained before the session ends. Diff Review, Accept,
+Reject, and History remain usable. Start / Reset begins another recording and resets
+the review baseline.
+
+Sessions and events are stored in memory and cleared on window reload. Agent and
+provider default to `unknown`. File events use `source: filesystem` and
+`confidence: observed`: they establish a filesystem change, not the actor's identity.
+User saves and build tools can produce these events too. Unsaved edits do not produce
+filesystem events and retain the existing user-baseline behavior.
+
+The models live in `src/session/AgentSession.ts`. `SessionManager` exposes
+`startSession`, `recordEvent`, `endSession`, `getCurrentSession`, `getSession`, and
+`getSessions`. `EventStore.getEvents(sessionId)` returns ordered, read-only snapshots.
+Timestamps use Unix milliseconds; ended sessions reject further recording.
+Supported events are `session-start/end`, `file-created/modified/deleted`, and
+`command-start/end`, with `observed`, `reported`, or `inferred` confidence.
+Command events currently have a typed recording interface only; terminal collection
+and agent reporting transport are not implemented.
+
+`FileChangeCollector` collects workspace UTF-8 text file notifications, drives the
+existing diff and whole-file History paths, and records events without changing
+accept/reject semantics. Timeline records delivered filesystem notifications;
+individual writes coalesced by the operating system cannot be reconstructed.
+
 ## Review actions
 
 - `Accept`: keep the current code and advance the baseline. Editor Undo cannot
@@ -56,6 +88,8 @@ With the official Codex extension installed, select code to use
 ## Commands
 
 - `Agent Review: Start Session`
+- `Agent Review: Reset Session`
+- `Agent Lens: End Agent Session`
 - `Agent Review: Open Change`
 - `Agent Review: View Before ↔ After`
 - `Agent Review: Accept Hunk`
@@ -87,5 +121,6 @@ development dependencies support Node 16.20.1.
 - Git workspaces use an isolated temporary environment and never modify the real
   index or staging area.
 - Non-Git and multi-root workspaces use an in-memory baseline.
-- Direct filesystem writes are treated as agent changes. Changes that make a
-  VS Code document dirty are treated as user edits.
+- Diff Review continues to review direct filesystem changes. Changes that make a
+  VS Code document dirty are treated as user edits. Timeline records filesystem
+  observations without attributing them to an agent.
