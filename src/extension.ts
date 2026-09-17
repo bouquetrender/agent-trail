@@ -9,7 +9,7 @@ import {
   BaselineContentProvider,
 } from "./ui/BaselineContentProvider";
 import { HunkCodeLensProvider } from "./ui/HunkCodeLensProvider";
-import { SelectionCodeLensProvider } from "./ui/SelectionCodeLensProvider";
+import { SelectionHoverProvider } from "./ui/SelectionHoverProvider";
 import { ChangeTreeProvider } from "./ui/ChangeTreeProvider";
 import { ChangeStatusBar } from "./ui/ChangeStatusBar";
 import { SessionTimelineProvider } from "./ui/SessionTimelineProvider";
@@ -26,7 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
     baselineProvider,
   );
   const codeLensProvider = new HunkCodeLensProvider(diffs);
-  const selectionCodeLensProvider = new SelectionCodeLensProvider();
+  const selectionHoverProvider = new SelectionHoverProvider();
   const treeProvider = new ChangeTreeProvider(diffs);
   const statusBar = new ChangeStatusBar(diffs, session);
   const timelineProvider = new SessionTimelineProvider(session.agentSessions);
@@ -145,7 +145,7 @@ export function activate(context: vscode.ExtensionContext): void {
     session,
     baselineProvider,
     codeLensProvider,
-    selectionCodeLensProvider,
+    selectionHoverProvider,
     treeProvider,
     statusBar,
     timelineProvider,
@@ -164,9 +164,9 @@ export function activate(context: vscode.ExtensionContext): void {
       { scheme: "file" },
       codeLensProvider,
     ),
-    vscode.languages.registerCodeLensProvider(
+    vscode.languages.registerHoverProvider(
       { scheme: "file" },
-      selectionCodeLensProvider,
+      selectionHoverProvider,
     ),
     vscode.commands.registerCommand("cursorForgery.endAgentSession", () =>
       session.endAgentSession(),

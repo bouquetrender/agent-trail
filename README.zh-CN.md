@@ -46,8 +46,8 @@
 
 ## Codex 上下文
 
-安装官方 Codex 扩展后，选中代码即可使用 `Add Selection`、`Add File`
-或 `Add Folder`，将选区、整个文件或当前文件所在文件夹加入 Codex 对话。
+安装官方 Codex 扩展后，选中代码并稍作停顿，悬浮框会自动显示 `Add Selection`、`Add File`
+或 `Add Folder`，将选区、整个文件或当前文件所在文件夹加入 Codex 对话。悬浮框不占用代码行空间，不会挤动选中代码；显示在上方还是下方由 VS Code 根据设置和可用空间决定。
 
 ## 命令
 

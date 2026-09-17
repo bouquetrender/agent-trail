@@ -82,8 +82,10 @@ updates its baseline and clears its pending review changes.
 
 ## Codex context
 
-With the official Codex extension installed, select code to use
-`Add Selection`, `Add File`, or `Add Folder`.
+With the official Codex extension installed, select code and pause briefly to show
+`Add Selection`, `Add File`, or `Add Folder` in a hover. The hover takes no space
+between code lines, so the selection stays in place. VS Code chooses whether to
+show it above or below based on settings and available space.
 
 ## Commands
 

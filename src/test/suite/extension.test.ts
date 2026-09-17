@@ -11,6 +11,7 @@ import { FileChangeCollector } from "../../session/FileChangeCollector";
 import { AgentEventItem, AgentSessionItem, SessionTimelineProvider } from "../../ui/SessionTimelineProvider";
 import { WorkspaceBaselineStore } from "../../session/WorkspaceBaselineStore";
 import { ChangeStatusBar } from "../../ui/ChangeStatusBar";
+import { SelectionHoverProvider } from "../../ui/SelectionHoverProvider";
 import { FileCommands } from "../../commands/FileCommands";
 import { BaselineContentProvider } from "../../ui/BaselineContentProvider";
 import {
@@ -96,6 +97,87 @@ suite("Agent Diff Review extension", () => {
     await store.set(sampleUri, MODIFIED);
     assert.strictEqual(await store.get(sampleUri), MODIFIED);
     store.clear();
+  });
+
+  test("offers selection actions in a hover without adding CodeLens rows", async () => {
+    const document = await vscode.workspace.openTextDocument(sampleUri);
+    const editor = await vscode.window.showTextDocument(document);
+    const provider = new SelectionHoverProvider();
+    const originalGetExtension = vscode.extensions.getExtension;
+    try {
+      vscode.extensions.getExtension = <T>(id: string) => originalGetExtension<T>(
+        id === "openai.chatgpt" ? "local.cursor-forgery" : id,
+      );
+      editor.selection = new vscode.Selection(1, 0, 2, 0);
+      const hover = provider.provideHover(document, editor.selection.active);
+      assert.ok(hover);
+      assert.ok(hover.range?.isEqual(editor.selection));
+      const contents = hover.contents[0];
+      assert.ok(contents instanceof vscode.MarkdownString);
+      assert.match(contents.value, /Add Selection\]\(command:chatgpt.addToThread\)/);
+      assert.ok(contents.value.includes(
+        `Add File](command:chatgpt.addFileToThread?${encodeURIComponent(JSON.stringify([document.uri]))})`,
+      ));
+      assert.ok(contents.value.includes(
+        `Add Folder](command:chatgpt.addFileToThread?${encodeURIComponent(JSON.stringify([vscode.Uri.file(path.dirname(document.uri.fsPath))]))})`,
+      ));
+      assert.deepStrictEqual(contents.isTrusted, {
+        enabledCommands: ["chatgpt.addToThread", "chatgpt.addFileToThread"],
+      });
+      assert.strictEqual((await getCodeLenses(sampleUri)).length, 0);
+      assert.strictEqual(provider.provideHover(document, new vscode.Position(0, 0)), undefined);
+      const otherDocument = await vscode.workspace.openTextDocument(secondUri);
+      assert.strictEqual(provider.provideHover(otherDocument, editor.selection.active), undefined);
+      editor.selection = new vscode.Selection(1, 0, 1, 0);
+      assert.strictEqual(provider.provideHover(document, editor.selection.active), undefined);
+      editor.selection = new vscode.Selection(2, 0, 1, 0);
+      assert.ok(provider.provideHover(document, editor.selection.active));
+      vscode.extensions.getExtension = originalGetExtension;
+      assert.strictEqual(provider.provideHover(document, editor.selection.active), undefined);
+    } finally {
+      vscode.extensions.getExtension = originalGetExtension;
+      provider.dispose();
+      editor.selection = new vscode.Selection(0, 0, 0, 0);
+    }
+  });
+
+  test("automatically shows selection hover after movement settles and cancels for an empty selection", async () => {
+    const document = await vscode.workspace.openTextDocument(sampleUri);
+    const editor = await vscode.window.showTextDocument(document);
+    editor.selection = new vscode.Selection(0, 0, 0, 0);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const originalGetExtension = vscode.extensions.getExtension;
+    const originalExecute = vscode.commands.executeCommand;
+    const hoverArgs: unknown[][] = [];
+    try {
+      vscode.extensions.getExtension = <T>(id: string) => originalGetExtension<T>(
+        id === "openai.chatgpt" ? "local.cursor-forgery" : id,
+      );
+      vscode.commands.executeCommand = <T>(command: string, ...args: unknown[]) => {
+        if (command === "editor.action.showHover") {
+          hoverArgs.push(args);
+        }
+        return originalExecute<T>(command, ...args);
+      };
+      editor.selection = new vscode.Selection(0, 0, 1, 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const selection = new vscode.Selection(0, 0, 2, 0);
+      editor.selection = selection;
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      assert.deepStrictEqual(hoverArgs, [[{ focus: "noAutoFocus" }]]);
+      assert.ok(editor.selection.isEqual(selection));
+      assert.strictEqual(document.getText(), ORIGINAL);
+
+      editor.selection = new vscode.Selection(0, 0, 1, 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      editor.selection = new vscode.Selection(0, 0, 0, 0);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      assert.strictEqual(hoverArgs.length, 1);
+    } finally {
+      vscode.extensions.getExtension = originalGetExtension;
+      vscode.commands.executeCommand = originalExecute;
+      editor.selection = new vscode.Selection(0, 0, 0, 0);
+    }
   });
 
   test("shows session lifecycle and pending file counts in the status bar", async () => {
