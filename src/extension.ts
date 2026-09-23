@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
+import { promises as fs } from "fs";
 import { localize } from "./localize";
 import { HunkCommands } from "./commands/HunkCommands";
 import { FileCommands } from "./commands/FileCommands";
 import { DiffService } from "./diff/DiffService";
 import { WorkspaceBaselineStore } from "./session/WorkspaceBaselineStore";
 import { ReviewSession } from "./session/ReviewSession";
-import { TerminalCollector } from "./session/TerminalCollector";
+import { CodexEventReader } from "./codex/CodexEventReader";
+import { installCodexHooks } from "./codex/CodexHookSetup";
 import {
   BASELINE_SCHEME,
   BaselineContentProvider,
@@ -20,7 +22,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const baselineStore = new WorkspaceBaselineStore();
   const diffs = new DiffService(baselineStore);
   const session = new ReviewSession(baselineStore, diffs);
-  const terminalCollector = new TerminalCollector(session.agentSessions, vscode.window);
   const baselineProvider = new BaselineContentProvider(baselineStore);
   const hunkCommands = new HunkCommands(
     baselineStore,
@@ -37,9 +38,58 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: timelineProvider,
     showCollapseAll: true,
   });
-  timelineView.message = terminalCollector.supported
-    ? localize("Memory only. Observed terminal activity requires shell integration. The actor is unknown.", "记录仅保存在内存中。观察终端活动需要 Shell Integration，执行者未知。")
-    : localize("Memory only. Terminal activity unavailable: requires VS Code 1.93+. The actor is unknown.", "记录仅保存在内存中。终端采集需要 VS Code 1.93 或更高版本，执行者未知。");
+  timelineView.message = localize(
+    "Codex hooks only. Connect Codex and trust its hooks to record activity. History is cleared on reload.",
+    "仅记录 Codex hooks 上报的活动。请接入 Codex 并信任 hooks。重载窗口后历史清空。",
+  );
+  const reportCodexError = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    void vscode.window.showErrorMessage(localize(`AgentTrail Codex connection: ${message}`, `AgentTrail Codex 接入：${message}`));
+  };
+  const readers = new Map<string, CodexEventReader>();
+  const storagePath = !vscode.env.remoteName &&
+    ["file", "vscode-userdata"].includes(context.globalStorageUri.scheme)
+    ? context.globalStorageUri.fsPath : undefined;
+  let disposed = false;
+  const startCodexReaders = async (): Promise<void> => {
+    if (!vscode.workspace.isTrusted || !storagePath) { return; }
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (folder.uri.scheme !== "file") { continue; }
+      const root = await fs.realpath(folder.uri.fsPath);
+      if (disposed || readers.has(root)) { continue; }
+      const reader = new CodexEventReader(storagePath, root,
+        (event) => session.codexEvents.accept(event), reportCodexError);
+      readers.set(root, reader);
+      context.subscriptions.push(reader);
+      await reader.start();
+    }
+  };
+  const connectCodex = async (): Promise<void> => {
+    if (!vscode.workspace.isTrusted) {
+      void vscode.window.showInformationMessage(localize("Trust this workspace before connecting Codex.", "请先信任当前工作区，再接入 Codex。"));
+      return;
+    }
+    const folders = vscode.workspace.workspaceFolders?.filter((folder) => folder.uri.scheme === "file") ?? [];
+    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({
+      placeHolder: localize("Choose the project to connect to Codex", "选择要接入 Codex 的项目"),
+    });
+    if (!folder) { return; }
+    if (folder.uri.scheme !== "file" || !storagePath) {
+      void vscode.window.showInformationMessage(localize("Codex hooks currently require a local VS Code workspace.", "Codex hooks 目前需要本地 VS Code 工作区。"));
+      return;
+    }
+    try {
+      const root = await fs.realpath(folder.uri.fsPath);
+      const config = await installCodexHooks(root, storagePath,
+        vscode.Uri.joinPath(context.extensionUri, "out", "codex", "hook.js").fsPath, process.execPath);
+      await startCodexReaders();
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(config));
+      void vscode.window.showInformationMessage(localize(
+        "User-level Codex hooks configured outside the project. Review and trust the hooks in Codex (CLI: /hooks), then start a new Codex turn. Reconnect after an AgentTrail update to refresh the hook script.",
+        "Codex hooks 已配置到项目之外的用户目录。请在 Codex 中审查并信任 hooks（CLI：/hooks），然后开始新一轮任务。更新 AgentTrail 后可再次接入以更新采集脚本。",
+      ));
+    } catch (error) { reportCodexError(error); }
+  };
   const updateAgentSessionUi = (): void => {
     void vscode.commands.executeCommand(
       "setContext", "cursorForgery.agentSessionActive",
@@ -147,7 +197,9 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
-    terminalCollector,
+    { dispose: () => { disposed = true; } },
+    vscode.workspace.onDidGrantWorkspaceTrust(() => { void startCodexReaders().catch(reportCodexError); }),
+    vscode.commands.registerCommand("cursorForgery.connectCodex", connectCodex),
     session,
     baselineProvider,
     codeLensProvider,
@@ -221,6 +273,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   if (vscode.workspace.workspaceFolders?.length) {
+    void startCodexReaders().catch(reportCodexError);
     void startSession(false, true);
   }
 }

@@ -19,6 +19,7 @@ export class FileCommands {
 
   async acceptFile(target?: UriCommandTarget | vscode.Uri | string): Promise<void> {
     const uri = this.resolveUri(target);
+    if (uri) { await this.session.recompute(uri); }
     if (!uri || !this.diffs.get(uri)) {
       return this.showNoFileMessage();
     }
@@ -31,6 +32,7 @@ export class FileCommands {
 
   async rejectFile(target?: UriCommandTarget | vscode.Uri | string): Promise<void> {
     const uri = this.resolveUri(target);
+    if (uri) { await this.session.recompute(uri); }
     const baseline = uri ? await this.baselineStore.get(uri) : undefined;
     if (!uri || baseline === undefined || !this.diffs.get(uri)) {
       return this.showNoFileMessage();
@@ -47,6 +49,7 @@ export class FileCommands {
   }
 
   async acceptAll(): Promise<void> {
+    await Promise.all(this.changedUris().map((uri) => this.session.recompute(uri)));
     const uris = this.changedUris();
     await Promise.all(
       uris.map(async (uri) => {
@@ -59,6 +62,7 @@ export class FileCommands {
   }
 
   async rejectAll(): Promise<void> {
+    await Promise.all(this.changedUris().map((uri) => this.session.recompute(uri)));
     const uris = this.changedUris();
     if (uris.length === 0) {
       return;
@@ -91,6 +95,7 @@ export class FileCommands {
     if (choice !== action) {
       return;
     }
+    await Promise.all(reviewable.map(({ uri }) => this.session.recompute(uri)));
     const baselines = await Promise.all(
       reviewable.map(({ uri }) => this.baselineStore.get(uri)),
     );

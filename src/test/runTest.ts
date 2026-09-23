@@ -10,6 +10,7 @@ async function main(): Promise<void> {
   const workspacePath = mkdtempSync(
     path.join(tmpdir(), "agent-diff-review-workspace-"),
   );
+  const codexHome = mkdtempSync(path.join(tmpdir(), "agenttrail-test-codex-"));
   writeFileSync(path.join(workspacePath, "sample.txt"), "alpha\nbeta\ngamma\n");
   writeFileSync(path.join(workspacePath, "second.txt"), "red\ngreen\nblue\n");
   writeFileSync(path.join(workspacePath, "staged.txt"), "staged content\n");
@@ -18,14 +19,16 @@ async function main(): Promise<void> {
 
   try {
     await runTests({
-      version: "1.85.2",
+      version: "stable",
       vscodeExecutablePath: process.env.VSCODE_EXECUTABLE_PATH,
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: [workspacePath, "--disable-extensions"],
+      extensionTestsEnv: { CODEX_HOME: codexHome },
+      launchArgs: [workspacePath, "--disable-extensions", "--disable-workspace-trust"],
     });
   } finally {
     rmSync(workspacePath, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
   }
 }
 

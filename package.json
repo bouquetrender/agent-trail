@@ -10,7 +10,7 @@
     "url": "https://github.com/bouquetrender/cursor-forgery.git"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.138.0"
   },
   "categories": [
     "Other"
@@ -25,6 +25,12 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "cursorForgery.connectCodex",
+        "title": "%command.connectCodex%",
+        "icon": "$(plug)",
+        "enablement": "workspaceFolderCount > 0 && isWorkspaceTrusted"
+      },
       {
         "command": "cursorForgery.endAgentSession",
         "title": "%command.endAgentSession%",
@@ -106,6 +112,11 @@
     },
     "viewsWelcome": [
       {
+        "view": "cursorForgery.timeline",
+        "contents": "%welcome.codex%",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
         "view": "cursorForgery.changes",
         "contents": "%welcome.start%",
         "when": "cursorForgery.sessionState != capturing && cursorForgery.sessionState != ready && workspaceFolderCount > 0"
@@ -161,6 +172,11 @@
       ],
       "view/title": [
         {
+          "command": "cursorForgery.connectCodex",
+          "when": "view == cursorForgery.timeline",
+          "group": "navigation@0"
+        },
+        {
           "command": "cursorForgery.endAgentSession",
           "when": "view == cursorForgery.timeline && cursorForgery.agentSessionActive && cursorForgery.sessionState == ready",
           "group": "navigation@1"
@@ -212,7 +228,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "node -e \"require('fs').rmSync('out', { recursive: true, force: true })\" && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test:unit": "npm run compile && mocha --ui tdd 'out/test/unit/**/*.test.js'",
     "test:integration": "npm run compile && node ./out/test/runTest.js",

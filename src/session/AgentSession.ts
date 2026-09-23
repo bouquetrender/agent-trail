@@ -2,6 +2,18 @@ export type AgentEventConfidence = "observed" | "reported" | "inferred";
 
 export type AgentEventData =
   | {
+      readonly type: "tool-call";
+      readonly payload: {
+        readonly tool: string;
+        readonly phase: "requested" | "completed";
+        readonly command: string;
+        readonly cwd: string;
+        readonly outcome: "succeeded" | "failed" | "unknown";
+        readonly exitCode?: number;
+        readonly durationMs?: number;
+      };
+    }
+  | {
       readonly type: "session-start";
       readonly payload: { readonly title: string };
     }
@@ -41,6 +53,8 @@ export type AgentEvent = AgentEventData & {
   readonly timestamp: number;
   readonly source: string;
   readonly confidence: AgentEventConfidence;
+  readonly externalCallId?: string;
+  readonly externalTurnId?: string;
 };
 
 export type AgentEventInput = Exclude<
@@ -50,6 +64,8 @@ export type AgentEventInput = Exclude<
   readonly source: string;
   readonly confidence: AgentEventConfidence;
   readonly timestamp?: number;
+  readonly externalCallId?: string;
+  readonly externalTurnId?: string;
 };
 
 export interface AgentSession {
@@ -57,6 +73,7 @@ export interface AgentSession {
   readonly title: string;
   readonly agent: string;
   readonly provider: string;
+  readonly externalSessionId?: string;
   readonly startedAt: number;
   readonly endedAt?: number;
   readonly status: "active" | "ended";

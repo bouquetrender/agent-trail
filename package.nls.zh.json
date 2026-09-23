@@ -1,4 +1,6 @@
 {
+  "command.connectCodex": "AgentTrail：接入 Codex",
+  "welcome.codex": "仅记录 Codex 工具活动。接入当前项目后，请在 Codex 中审查并信任 hooks。\n[接入 Codex](command:cursorForgery.connectCodex)",
   "command.endAgentSession": "AgentTrail：结束会话",
   "command.startSession": "AgentTrail：开始会话",
   "command.resetSession": "AgentTrail：重置会话",
@@ -17,7 +19,7 @@
   "welcome.start": "开始会话以监听智能体变更。\n[开始会话](command:cursorForgery.startSession)",
   "welcome.workspace": "打开工作区文件夹以开始审查智能体变更。\n[打开文件夹](command:vscode.openFolder)",
   "welcome.capturing": "正在捕获审查基线…完成后将开始监听文件变化。",
-  "welcome.ready": "暂无待审查变更，正在监听文件变化。",
+  "welcome.ready": "暂无已确认的 Codex 变更。请接入 Codex 并信任 hooks。\n[接入 Codex](command:cursorForgery.connectCodex)",
   "menu.moreReviewActions": "更多审查操作",
   "extension.description": "观察智能体行为，审查每一步变更。"
 }

@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { promises as fs } from "fs";
+import * as path from "path";
 import { localize } from "../localize";
 import { DiffService } from "../diff/DiffService";
 import type { BaselineStore } from "./BaselineStore";
@@ -6,6 +8,9 @@ import { EventStore } from "./EventStore";
 import { FileChangeCollector } from "./FileChangeCollector";
 import { GitBranchWatcher } from "./GitBranchWatcher";
 import { SessionManager } from "./SessionManager";
+import { CodexEventCollector } from "../codex/CodexEventCollector";
+import type { CodexPatch } from "../codex/hook";
+import { isWithin } from "../codex/hook";
 
 const WATCH_DEBOUNCE_MS = 250;
 const DOCUMENT_ORIGIN_DELAY_MS = 100;
@@ -14,6 +19,7 @@ const EXTERNAL_CHANGE_WINDOW_MS = 500;
 export type ReviewSessionState = "inactive" | "capturing" | "ready";
 
 export class ReviewSession implements vscode.Disposable {
+  readonly codexEvents: CodexEventCollector;
   private readonly collector: FileChangeCollector;
   private readonly branchWatcher: GitBranchWatcher;
   private branchWatching: Promise<void> | undefined;
@@ -27,6 +33,9 @@ export class ReviewSession implements vscode.Disposable {
   private readonly pendingUserEdits = new Set<string>();
   private readonly internalEdits = new Set<string>();
   private readonly externalChangeTimes = new Map<string, number>();
+  private readonly confirmedContents = new Map<string, string>();
+  private pendingCodexChanges: Promise<void> = Promise.resolve();
+  private workspaceRoots: { path: string; uri: vscode.Uri }[] = [];
   private readonly baselineChangeEmitter = new vscode.EventEmitter<vscode.Uri | undefined>();
   private readonly documentChangeSubscription: vscode.Disposable;
   private active = false;
@@ -41,12 +50,16 @@ export class ReviewSession implements vscode.Disposable {
     readonly diffs: DiffService,
     readonly agentSessions = new SessionManager(new EventStore()),
   ) {
-    this.collector = new FileChangeCollector(
-      baselineStore,
-      diffs,
-      agentSessions,
-      (uri) => this.handleFileSystemChange(uri),
-    );
+    this.codexEvents = new CodexEventCollector(agentSessions, (patch) => {
+      const generation = this.generation;
+      this.pendingCodexChanges = this.pendingCodexChanges
+        .then(() => this.confirmCodexChange(patch, generation))
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          void vscode.window.showErrorMessage(localize(`AgentTrail could not record a Codex change: ${message}`, `无法记录 Codex 变更：${message}`));
+        });
+    }, (filename) => (this.workspaceUri(filename) ?? vscode.Uri.file(filename)).toString());
+    this.collector = new FileChangeCollector((uri) => this.handleFileSystemChange(uri));
     this.documentChangeSubscription = vscode.workspace.onDidChangeTextDocument(
       (event) => this.handleDocumentChange(event),
     );
@@ -86,12 +99,16 @@ export class ReviewSession implements vscode.Disposable {
       throw new Error(localize("Open a workspace folder before starting an AgentTrail session.", "请先打开工作区文件夹，再开始审查会话。"));
     }
 
+    this.codexEvents.stopRecording();
     const stopping = this.collector.stop();
     this.stopWatcher();
     this.setState("capturing");
     this.diffs.clear();
     try {
       await stopping;
+      await this.pendingCodexChanges;
+      this.workspaceRoots = await Promise.all(folders.filter((folder) => folder.uri.scheme === "file")
+        .map(async (folder) => ({ path: await fs.realpath(folder.uri.fsPath), uri: folder.uri })));
       this.branchWatching ??= this.branchWatcher.start(
         folders.filter((folder) => folder.uri.scheme === "file")
           .map((folder) => folder.uri.fsPath),
@@ -120,7 +137,7 @@ export class ReviewSession implements vscode.Disposable {
       }
       this.baselineChangeEmitter.fire(undefined);
       report?.(localize("Starting filesystem watcher…", "正在开始监听文件变化…"));
-      this.agentSessions.startSession({ title: localize("Workspace Session", "工作区会话") });
+      this.codexEvents.startRecording();
       this.collector.start();
       this.active = true;
       this.setState("ready");
@@ -136,9 +153,45 @@ export class ReviewSession implements vscode.Disposable {
   }
 
   async recompute(uri: vscode.Uri): Promise<void> {
-    if (this.active && this.baselineStore.has(uri)) {
-      await this.diffs.recompute(uri);
+    const content = this.confirmedContents.get(uri.toString());
+    if (this.active && this.baselineStore.has(uri) && content !== undefined) {
+      await this.diffs.recompute(uri, content);
+    } else {
+      this.diffs.removePending(uri);
     }
+  }
+
+  async flushCodexChanges(): Promise<void> {
+    await this.pendingCodexChanges;
+  }
+
+  private async confirmCodexChange(patch: CodexPatch, generation: number): Promise<void> {
+    if (!this.active || generation !== this.generation) { return; }
+    const uri = this.workspaceUri(patch.path);
+    if (!uri) { return; }
+    const key = uri.toString();
+    if (patch.kind !== "M") {
+      this.confirmedContents.delete(key);
+      this.diffs.recordWholeFileChange(uri, patch.kind === "A" ? "added" : "deleted");
+      return;
+    }
+    if (!this.baselineStore.has(uri) || patch.before === null || patch.after === null) { return; }
+    this.diffs.recordConfirmedChange(uri, patch.before, patch.after);
+    const document = await vscode.workspace.openTextDocument(uri);
+    if (generation !== this.generation || document.isDirty) { return; }
+    // Absorb unreported edits before this operation; never offer to reject them as Codex changes.
+    if (this.confirmedContents.get(key) !== patch.before) {
+      await this.baselineStore.set(uri, patch.before);
+      if (generation !== this.generation) { return; }
+      this.baselineChangeEmitter.fire(uri);
+    }
+    this.confirmedContents.set(key, patch.after);
+    await this.recompute(uri);
+  }
+
+  private workspaceUri(filename: string): vscode.Uri | undefined {
+    const root = this.workspaceRoots.find((folder) => isWithin(folder.path, filename));
+    return root ? vscode.Uri.joinPath(root.uri, ...path.relative(root.path, filename).split(path.sep)) : undefined;
   }
 
   async applyReviewEdit(
@@ -148,20 +201,29 @@ export class ReviewSession implements vscode.Disposable {
     const keys = uris.map((uri) => uri.toString());
     keys.forEach((key) => this.internalEdits.add(key));
     try {
-      return await vscode.workspace.applyEdit(edit);
+      const applied = await vscode.workspace.applyEdit(edit);
+      if (applied) {
+        for (const uri of uris) {
+          const document = await vscode.workspace.openTextDocument(uri);
+          this.confirmedContents.set(uri.toString(), document.getText());
+        }
+      }
+      return applied;
     } finally {
       keys.forEach((key) => this.internalEdits.delete(key));
     }
   }
 
   async endAgentSession(): Promise<void> {
-    await this.collector.endSession();
+    this.codexEvents.stopRecording();
+    await this.pendingCodexChanges;
   }
 
   dispose(): void {
     this.disposed = true;
     this.branchWatcher.dispose();
     this.collector.dispose();
+    this.codexEvents.stopRecording();
     this.stopWatcher();
     this.agentSessions.dispose();
     this.documentChangeSubscription.dispose();
@@ -188,13 +250,14 @@ export class ReviewSession implements vscode.Disposable {
       key,
       setTimeout(() => {
         this.timers.delete(key);
-        void this.diffs.recompute(uri);
+        void this.recompute(uri);
       }, WATCH_DEBOUNCE_MS),
     );
   }
 
   private handleFileSystemChange(uri: vscode.Uri): void {
     this.externalChangeTimes.set(uri.toString(), Date.now());
+    this.diffs.removePending(uri);
     this.scheduleRecompute(uri);
   }
 
@@ -211,6 +274,7 @@ export class ReviewSession implements vscode.Disposable {
       return;
     }
 
+    this.diffs.removePending(document.uri);
     const existing = this.documentOriginTimers.get(key);
     if (existing) {
       clearTimeout(existing);
@@ -269,7 +333,8 @@ export class ReviewSession implements vscode.Disposable {
         return;
       }
       this.baselineChangeEmitter.fire(document.uri);
-      await this.diffs.recompute(document.uri);
+      this.confirmedContents.delete(key);
+      this.diffs.removePending(document.uri);
     } finally {
       if (generation === this.generation) {
         this.pendingUserEdits.delete(key);
@@ -294,6 +359,7 @@ export class ReviewSession implements vscode.Disposable {
     this.pendingUserEdits.clear();
     this.internalEdits.clear();
     this.externalChangeTimes.clear();
+    this.confirmedContents.clear();
     this.active = false;
     this.setState("inactive");
   }

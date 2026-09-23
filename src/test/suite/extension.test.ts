@@ -6,9 +6,8 @@ import * as vscode from "vscode";
 import { DiffService } from "../../diff/DiffService";
 import { MemoryBaselineStore } from "../../session/MemoryBaselineStore";
 import { ReviewSession } from "../../session/ReviewSession";
-import { EventStore } from "../../session/EventStore";
-import { SessionManager } from "../../session/SessionManager";
-import { FileChangeCollector } from "../../session/FileChangeCollector";
+import { codexWrite, connectTestCodex } from "./codexFixture";
+import { normalizeHook } from "../../codex/hook";
 import { AgentEventItem, AgentSessionItem, SessionTimelineProvider } from "../../ui/SessionTimelineProvider";
 import { WorkspaceBaselineStore } from "../../session/WorkspaceBaselineStore";
 import { ChangeStatusBar } from "../../ui/ChangeStatusBar";
@@ -28,13 +27,19 @@ const MODIFIED = "alpha\nBETA\ngamma\n";
 const SECOND_ORIGINAL = "red\ngreen\nblue\n";
 const SECOND_MODIFIED = "red\nGREEN\nblue\n";
 
-suite("AgentTrail extension", () => {
+suite("AgentTrail extension", function () {
+  this.timeout(5_000);
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(workspaceFolder);
   const sampleUri = vscode.Uri.joinPath(workspaceFolder.uri, "sample.txt");
   const secondUri = vscode.Uri.joinPath(workspaceFolder.uri, "second.txt");
   const createdUri = vscode.Uri.joinPath(workspaceFolder.uri, "created.txt");
   const deletedUri = vscode.Uri.joinPath(workspaceFolder.uri, "deleted.txt");
+
+  suiteSetup(async function () {
+    this.timeout(10_000);
+    await connectTestCodex();
+  });
 
   setup(async () => {
     await deleteIfExists(createdUri);
@@ -57,6 +62,7 @@ suite("AgentTrail extension", () => {
       "cursorForgery.startSession",
       "cursorForgery.resetSession",
       "cursorForgery.endAgentSession",
+      "cursorForgery.connectCodex",
       "cursorForgery.openHunk",
       "cursorForgery.openHunkDiff",
       "cursorForgery.acceptHunk",
@@ -272,13 +278,13 @@ suite("AgentTrail extension", () => {
     try {
       await commands.rejectAll();
       assert.strictEqual(prompts, 0);
-      await store.capture({ uris: [sampleUri] });
-      await store.set(sampleUri, MODIFIED);
-      await diffs.recompute(sampleUri);
+      await session.start();
+      await codexWrite(sampleUri, MODIFIED, session);
+      await waitForWatcher();
       await commands.rejectAll();
       assert.strictEqual(prompts, 1);
-      assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), ORIGINAL);
-      assert.strictEqual(await store.get(sampleUri), MODIFIED);
+      assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), MODIFIED);
+      assert.strictEqual(await store.get(sampleUri), ORIGINAL);
       assert.strictEqual(diffs.getFileCount(), 1);
       store.clear();
       await commands.rejectAll();
@@ -290,7 +296,8 @@ suite("AgentTrail extension", () => {
     }
   });
 
-  test("bulk rejection stops when a file or baseline changes during confirmation", async () => {
+  test("bulk rejection stops when a file or baseline changes during confirmation", async function () {
+    this.timeout(10_000);
     const store = new MemoryBaselineStore();
     const diffs = new DiffService(store);
     const session = new ReviewSession(store, diffs);
@@ -317,17 +324,22 @@ suite("AgentTrail extension", () => {
       return items[0];
     };
     try {
-      await store.capture({ uris: [sampleUri] });
-      await store.set(sampleUri, MODIFIED);
-      await diffs.recompute(sampleUri);
+      await session.start();
+      await codexWrite(sampleUri, MODIFIED, session);
+      await waitForWatcher();
       await commands.rejectAll();
       const document = await vscode.workspace.openTextDocument(sampleUri);
-      assert.strictEqual(document.getText(), `new user edit\n${ORIGINAL}`);
+      assert.strictEqual(document.getText(), `new user edit\n${MODIFIED}`);
       assert.match(warnings[1], /changed while confirmation was open/);
 
+      await replaceAndSave(sampleUri, ORIGINAL);
+      await waitForWatcher();
+      await session.start();
+      await codexWrite(sampleUri, MODIFIED, session);
+      await waitForWatcher();
       changedTarget = "baseline";
       await commands.rejectAll();
-      assert.strictEqual(document.getText(), `new user edit\n${ORIGINAL}`);
+      assert.strictEqual(document.getText(), MODIFIED);
       assert.strictEqual(await store.get(sampleUri), "new baseline\n");
       assert.match(warnings[3], /changed while confirmation was open/);
     } finally {
@@ -399,8 +411,8 @@ suite("AgentTrail extension", () => {
     }
   });
 
-  test("detects a saved change and exposes review actions", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+  test("detects a confirmed Codex patch and exposes review actions", async () => {
+    await codexWrite(sampleUri, MODIFIED);
     await waitForWatcher();
     const document = await vscode.workspace.openTextDocument(sampleUri);
     const lenses = await vscode.commands.executeCommand<vscode.CodeLens[]>(
@@ -424,8 +436,9 @@ suite("AgentTrail extension", () => {
     assert.strictEqual(document.getText(), ORIGINAL);
   });
 
-  test("reset clears agent changes and captures the current files as a new baseline", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+  test("reset clears agent changes and captures the current files as a new baseline", async function () {
+    this.timeout(5_000);
+    await codexWrite(sampleUri, MODIFIED);
     await waitForWatcher();
     assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
 
@@ -437,7 +450,7 @@ suite("AgentTrail extension", () => {
     );
     assert.strictEqual((await getCodeLenses(sampleUri)).length, 0);
 
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(ORIGINAL));
+    await codexWrite(sampleUri, ORIGINAL);
     await waitForWatcher();
     assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
   });
@@ -476,11 +489,17 @@ suite("AgentTrail extension", () => {
       git("switch", "--quiet", "review-base");
       await waitForWatcher();
       await session.start();
+      const request = normalizeHook({
+        hook_event_name: "PreToolUse", session_id: "before-branch", tool_use_id: "call",
+        cwd: workspaceFolder.uri.fsPath, tool_name: "Bash", tool_input: { command: "npm test" },
+      }, workspaceFolder.uri.fsPath);
+      assert.ok(request);
+      session.codexEvents.accept(request);
       const previousId = session.agentSessions.getCurrentSession()?.id;
       assert.ok(previousId);
 
-      await vscode.workspace.fs.writeFile(secondUri, Buffer.from(SECOND_MODIFIED));
-      await vscode.workspace.fs.writeFile(createdUri, Buffer.from("carried untracked file\n"));
+      await codexWrite(secondUri, SECOND_MODIFIED, session);
+      await codexWrite(createdUri, "carried untracked file\n", session);
       await waitForWatcher();
       assert.ok(diffs.get(secondUri));
       assert.ok(diffs.hasWholeFileChange(createdUri, "added"));
@@ -516,7 +535,7 @@ suite("AgentTrail extension", () => {
       assert.strictEqual(readFileSync(sampleUri.fsPath, "utf8"), MODIFIED);
       assert.strictEqual(readFileSync(secondUri.fsPath, "utf8"), SECOND_MODIFIED);
 
-      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from("new agent change\n"));
+      await codexWrite(sampleUri, "new agent change\n", session);
       await waitForWatcher();
       assert.ok(diffs.get(sampleUri));
       const provider = new BaselineContentProvider(store);
@@ -571,7 +590,7 @@ suite("AgentTrail extension", () => {
       releaseCapture?.();
       await reset;
       assert.strictEqual(captures, 2);
-      assert.strictEqual(session.agentSessions.getSessions().length, 2);
+      assert.strictEqual(session.agentSessions.getSessions().length, 0);
       assert.strictEqual(session.getState(), "ready");
       assert.strictEqual(await store.get(sampleUri), MODIFIED);
       assert.strictEqual(session.diffs.hasAgentChanges(), false);
@@ -607,6 +626,30 @@ suite("AgentTrail extension", () => {
     }
   });
 
+  test("does not let an older verification remove a newer confirmed diff", async () => {
+    const store = new MemoryBaselineStore();
+    const diffs = new DiffService(store);
+    try {
+      await store.capture({ uris: [sampleUri] });
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+      await waitForWatcher();
+      const get = store.get.bind(store);
+      let finishRead: ((content: string) => void) | undefined;
+      store.get = () => new Promise<string>((resolve) => { finishRead = resolve; });
+      const old = diffs.recompute(sampleUri, ORIGINAL);
+      assert.ok(finishRead);
+      store.get = get;
+      await diffs.recompute(sampleUri, MODIFIED);
+      assert.strictEqual(diffs.getFileCount(), 1);
+      finishRead(ORIGINAL);
+      await old;
+      assert.strictEqual(diffs.getFileCount(), 1);
+    } finally {
+      diffs.dispose();
+      store.clear();
+    }
+  });
+
   test("separates pending and historical changes and opens their tree rows", async () => {
     const store = new MemoryBaselineStore();
     const diffs = new DiffService(store);
@@ -616,11 +659,8 @@ suite("AgentTrail extension", () => {
       await store.capture({ uris: [sampleUri, secondUri] });
       assert.deepStrictEqual(provider.getChildren(), []);
 
-      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
-      await vscode.workspace.fs.writeFile(
-        secondUri,
-        Buffer.from(SECOND_MODIFIED),
-      );
+      await codexWrite(sampleUri, MODIFIED);
+      await codexWrite(secondUri, SECOND_MODIFIED);
       await waitForWatcher();
       await diffs.recomputeAll();
 
@@ -795,11 +835,10 @@ suite("AgentTrail extension", () => {
 
     try {
       await session.start();
-      const agentSessionId = session.agentSessions.getCurrentSession()?.id;
-      assert.ok(agentSessionId);
-      await vscode.workspace.fs.writeFile(createdUri, Buffer.from("first\n"));
+      assert.deepStrictEqual(session.agentSessions.getSessions(), []);
+      await codexWrite(createdUri, "first\n", session);
       await waitForWatcher();
-      await vscode.workspace.fs.writeFile(createdUri, Buffer.from("second\n"));
+      await codexWrite(createdUri, "second\n", session);
       await waitForWatcher();
 
       const rootsAfterCreate = provider.getChildren();
@@ -817,15 +856,11 @@ suite("AgentTrail extension", () => {
         vscode.TreeItemCollapsibleState.None,
       );
 
-      await vscode.workspace.fs.delete(createdUri);
+      await codexWrite(createdUri, null, session);
       await waitForWatcher();
 
       assert.deepStrictEqual(provider.getChildren(rootsAfterCreate[0]), []);
-      const events = session.agentSessions.getSession(agentSessionId)?.events ?? [];
-      assert.deepStrictEqual(
-        events.filter((event) => "uri" in event.payload && event.payload.uri === createdUri.toString()).map((event) => event.type),
-        ["file-created", "file-modified", "file-deleted"],
-      );
+      assert.strictEqual(session.agentSessions.getSessions().length, 1);
       const lifecycleFiles = provider.getChildren(rootsAfterCreate[1]);
       assert.deepStrictEqual(
         lifecycleFiles.map((item) =>
@@ -856,14 +891,14 @@ suite("AgentTrail extension", () => {
 
     try {
       await session.start();
-      await vscode.workspace.fs.writeFile(deletedUri, Buffer.from("after\n"));
+      await codexWrite(deletedUri, "after\n", session);
       await waitForWatcher();
 
       const rootsAfterModify = provider.getChildren();
       assert.strictEqual(rootsAfterModify.length, 2);
       assert.strictEqual(provider.getChildren(rootsAfterModify[0]).length, 1);
 
-      await vscode.workspace.fs.delete(deletedUri);
+      await codexWrite(deletedUri, null, session);
       await waitForWatcher();
 
       assert.deepStrictEqual(provider.getChildren(rootsAfterModify[0]), []);
@@ -902,11 +937,12 @@ suite("AgentTrail extension", () => {
     const subscription = timeline.onDidChangeTreeData(() => refreshes++);
     try {
       await session.start();
-      const firstId = session.agentSessions.getCurrentSession()?.id;
-      assert.ok(firstId);
-      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+      assert.deepStrictEqual(timeline.getChildren(), []);
+      await codexWrite(sampleUri, MODIFIED, session);
       await waitForWatcher();
       assert.ok(diffs.get(sampleUri));
+      const firstId = session.agentSessions.getCurrentSession()?.id;
+      assert.ok(firstId);
       const root = timeline.getChildren()[0];
       assert.ok(root instanceof AgentSessionItem);
       const fileEvents = timeline.getChildren(root).filter((item) =>
@@ -916,9 +952,9 @@ suite("AgentTrail extension", () => {
       assert.ok(fileEvents.length > 0);
       const item = fileEvents[0];
       assert.ok(item instanceof AgentEventItem);
-      assert.strictEqual(item.event.source, "filesystem");
-      assert.strictEqual(item.event.confidence, "observed");
-      assert.match(String(item.tooltip), /actor is unknown/);
+      assert.strictEqual(item.event.source, "codex-hook");
+      assert.strictEqual(item.event.confidence, "reported");
+      assert.match(String(item.tooltip), /Codex hook/);
       await session.endAgentSession();
       assert.strictEqual(session.isActive(), true);
       assert.strictEqual(session.getState(), "ready");
@@ -931,23 +967,20 @@ suite("AgentTrail extension", () => {
       assert.strictEqual(diffs.get(sampleUri), undefined);
       await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(ORIGINAL));
       await waitForWatcher();
-      assert.ok(diffs.get(sampleUri));
+      assert.strictEqual(diffs.get(sampleUri), undefined);
       await commands.rejectFile(sampleUri);
-      assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), MODIFIED);
+      assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), ORIGINAL);
       assert.strictEqual(diffs.get(sampleUri), undefined);
       assert.ok(diffs.hasAgentChanges());
       assert.deepStrictEqual(session.agentSessions.getSession(firstId), ended);
       await session.start();
-      assert.notStrictEqual(session.agentSessions.getCurrentSession()?.id, firstId);
-      assert.strictEqual(timeline.getChildren().length, 2);
+      assert.strictEqual(session.agentSessions.getCurrentSession(), undefined);
+      assert.strictEqual(timeline.getChildren().length, 1);
       assert.deepStrictEqual(session.agentSessions.getSession(firstId), ended);
       assert.strictEqual(diffs.hasAgentChanges(), false);
       assert.ok(refreshes >= 4);
-      const secondId = session.agentSessions.getCurrentSession()?.id;
-      assert.ok(secondId);
       await session.start();
-      assert.strictEqual(session.agentSessions.getSession(secondId)?.status, "ended");
-      assert.strictEqual(timeline.getChildren().length, 3);
+      assert.strictEqual(timeline.getChildren().length, 1);
     } finally {
       subscription.dispose();
       timeline.dispose();
@@ -956,46 +989,85 @@ suite("AgentTrail extension", () => {
     }
   });
 
-  test("drains observed file events before ending a session", async () => {
+  test("does not attribute user saves to Codex", async () => {
     const store = new MemoryBaselineStore();
-    await store.capture({ uris: [sampleUri] });
-    const diffs = new DiffService(store);
-    const manager = new SessionManager(new EventStore());
-    const collector = new FileChangeCollector(store, diffs, manager, () => {});
-    const created = new vscode.EventEmitter<vscode.Uri>();
-    const changed = new vscode.EventEmitter<vscode.Uri>();
-    const deleted = new vscode.EventEmitter<vscode.Uri>();
-    const originalWatcher = vscode.workspace.createFileSystemWatcher;
-    vscode.workspace.createFileSystemWatcher = () => ({
-      ignoreCreateEvents: false,
-      ignoreChangeEvents: false,
-      ignoreDeleteEvents: false,
-      onDidCreate: created.event,
-      onDidChange: changed.event,
-      onDidDelete: deleted.event,
-      dispose: () => { created.dispose(); changed.dispose(); deleted.dispose(); },
-    });
+    const session = new ReviewSession(store, new DiffService(store));
     try {
-      const first = manager.startSession({ title: "Draining" });
-      collector.start();
-      changed.fire(sampleUri);
-      const ending = collector.endSession();
-      assert.strictEqual(manager.getCurrentSession()?.id, first.id);
-      await ending;
-      assert.deepStrictEqual(manager.getSession(first.id)?.events.map((event) => event.type),
-        ["session-start", "file-modified", "session-end"]);
-      await collector.stop();
-      const second = manager.startSession({ title: "Next" });
-      assert.deepStrictEqual(manager.getSession(second.id)?.events.map((event) => event.type),
-        ["session-start"]);
-      assert.strictEqual(manager.getSession(first.id)?.events.length, 3);
+      await session.start();
+      await replaceAndSave(sampleUri, MODIFIED);
+      await waitForWatcher();
+      assert.deepStrictEqual(session.agentSessions.getSessions(), []);
+      assert.strictEqual(session.diffs.hasAgentChanges(), false);
+      assert.strictEqual(session.diffs.getFileCount(), 0);
     } finally {
-      vscode.workspace.createFileSystemWatcher = originalWatcher;
-      collector.dispose();
-      manager.dispose();
-      diffs.dispose();
-      store.clear();
+      session.dispose();
     }
+  });
+
+  test("ignores unreported filesystem modifications, additions and deletions", async () => {
+    const store = new MemoryBaselineStore();
+    const session = new ReviewSession(store, new DiffService(store));
+    try {
+      await session.start();
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+      await vscode.workspace.fs.writeFile(createdUri, Buffer.from("ordinary file\n"));
+      await waitForWatcher();
+      await vscode.workspace.fs.delete(createdUri);
+      await waitForWatcher();
+      assert.strictEqual(session.diffs.getFileCount(), 0);
+      assert.strictEqual(session.diffs.hasAgentChanges(), false);
+      assert.deepStrictEqual(session.agentSessions.getSessions(), []);
+      assert.strictEqual((await getCodeLenses(sampleUri)).length, 0);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  test("excludes unrelated changes before a patch and invalidates review after another writer", async function () {
+    this.timeout(10_000);
+    const store = new MemoryBaselineStore();
+    const session = new ReviewSession(store, new DiffService(store));
+    const provider = new BaselineContentProvider(store);
+    const commands = new FileCommands(store, session.diffs, session, provider);
+    try {
+      await session.start();
+      const before = "user alpha\nbeta\ngamma\n";
+      const after = "user alpha\nBETA\ngamma\n";
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(before));
+      await waitForWatcher();
+      await codexWrite(sampleUri, after, session);
+      await waitForWatcher();
+      assert.strictEqual(await store.get(sampleUri), before);
+      assert.strictEqual(session.diffs.get(sampleUri)?.hunks.length, 1);
+      assert.strictEqual(session.diffs.get(sampleUri)?.hunks[0].baselineText, "beta\n");
+      const later = `${after}another writer\n`;
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(later));
+      await waitForWatcher();
+      assert.strictEqual(session.diffs.get(sampleUri), undefined);
+      await commands.rejectFile(sampleUri);
+      assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), later);
+      const history = session.diffs.getAllAgentChanges();
+      assert.strictEqual(history.length, 1);
+      assert.strictEqual(history[0].hunks[0].currentText, "BETA\n");
+    } finally {
+      provider.dispose();
+      session.dispose();
+    }
+  });
+
+  test("accumulates sequential confirmed patches and safely rejects only one hunk", async function () {
+    this.timeout(10_000);
+    await codexWrite(sampleUri, "ALPHA\nbeta\ngamma\n");
+    await waitForWatcher();
+    await codexWrite(sampleUri, "ALPHA\nbeta\nGAMMA\n");
+    await waitForWatcher();
+    const lenses = await getCodeLenses(sampleUri);
+    assert.strictEqual(lenses.length, 6);
+    const reject = lenses[2].command;
+    assert.ok(reject?.arguments);
+    await vscode.commands.executeCommand(reject.command, ...reject.arguments);
+    assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), "alpha\nbeta\nGAMMA\n");
+    assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
   });
 
   test("keeps binary, non-UTF-8 and directory changes out of Timeline", async function () {
@@ -1020,12 +1092,7 @@ suite("AgentTrail extension", () => {
       const excludedUris = new Set(
         [binaryUri, invalidUri, directoryUri].map((uri) => uri.toString()),
       );
-      const events = session.agentSessions.getSessions()[0].events;
-      assert.strictEqual(events[0].type, "session-start");
-      assert.strictEqual(events[events.length - 1].type, "session-end");
-      assert.deepStrictEqual(events.filter((event) =>
-        "uri" in event.payload && excludedUris.has(event.payload.uri),
-      ), []);
+      assert.deepStrictEqual(session.agentSessions.getSessions(), []);
       assert.deepStrictEqual(diffs.getAllAgentChanges().filter((change) =>
         excludedUris.has(change.uri),
       ), []);
@@ -1038,7 +1105,7 @@ suite("AgentTrail extension", () => {
   });
 
   test("accept updates the baseline without changing the current file", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+    await codexWrite(sampleUri, MODIFIED);
     await waitForWatcher();
     const before = await vscode.commands.executeCommand<vscode.CodeLens[]>(
       "vscode.executeCodeLensProvider",
@@ -1059,7 +1126,7 @@ suite("AgentTrail extension", () => {
   });
 
   test("Request Change still selects the hunk for the Codex integration", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+    await codexWrite(sampleUri, MODIFIED);
     await waitForWatcher();
     const lens = (await getCodeLenses(sampleUri))[1];
     assert.ok(lens.command?.arguments);
@@ -1096,18 +1163,12 @@ suite("AgentTrail extension", () => {
       edit.replace(sampleUri, document.lineAt(1).range, "USER BETA");
       await vscode.workspace.applyEdit(edit);
       await waitForUserBaseline();
-      assert.strictEqual(session.agentSessions.getCurrentSession()?.events.length, 1);
+      assert.deepStrictEqual(session.agentSessions.getSessions(), []);
       assert.strictEqual(diffs.get(sampleUri), undefined);
       await document.save();
       await waitForWatcher();
       assert.strictEqual(diffs.get(sampleUri), undefined);
-      const events = session.agentSessions.getCurrentSession()?.events ?? [];
-      const fileEvents = events.filter((event) => event.type === "file-modified");
-      assert.ok(fileEvents.length > 0);
-      assert.ok(fileEvents.every((event) =>
-        event.source === "filesystem" && event.confidence === "observed",
-      ));
-      assert.strictEqual(session.agentSessions.getCurrentSession()?.agent, "unknown");
+      assert.deepStrictEqual(session.agentSessions.getSessions(), []);
     } finally {
       session.dispose();
     }
@@ -1128,7 +1189,7 @@ suite("AgentTrail extension", () => {
   });
 
   test("user editing a pending file takes ownership of its current state", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+    await codexWrite(sampleUri, MODIFIED);
     await waitForWatcher();
     assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
     const document = await vscode.workspace.openTextDocument(sampleUri);
@@ -1142,7 +1203,7 @@ suite("AgentTrail extension", () => {
   });
 
   test("opens a native diff with baseline and current documents", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+    await codexWrite(sampleUri, MODIFIED);
     await waitForWatcher();
     const lens = (await getCodeLenses(sampleUri))[0];
     assert.ok(lens.command?.arguments);
@@ -1160,7 +1221,7 @@ suite("AgentTrail extension", () => {
 
   test("reject file restores every hunk through a workspace edit", async () => {
     const twoHunks = "ALPHA\nbeta\nGAMMA\n";
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(twoHunks));
+    await codexWrite(sampleUri, twoHunks);
     await waitForWatcher();
     assert.strictEqual((await getCodeLenses(sampleUri)).length, 6);
 
@@ -1172,8 +1233,8 @@ suite("AgentTrail extension", () => {
   });
 
   test("accept all advances baselines for multiple files", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
-    await vscode.workspace.fs.writeFile(secondUri, Buffer.from(SECOND_MODIFIED));
+    await codexWrite(sampleUri, MODIFIED);
+    await codexWrite(secondUri, SECOND_MODIFIED);
     await waitForWatcher();
     assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
     assert.strictEqual((await getCodeLenses(secondUri)).length, 3);
@@ -1190,8 +1251,8 @@ suite("AgentTrail extension", () => {
   });
 
   test("reject all restores multiple files", async () => {
-    await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
-    await vscode.workspace.fs.writeFile(secondUri, Buffer.from(SECOND_MODIFIED));
+    await codexWrite(sampleUri, MODIFIED);
+    await codexWrite(secondUri, SECOND_MODIFIED);
     await waitForWatcher();
 
     const originalWarning = vscode.window.showWarningMessage;

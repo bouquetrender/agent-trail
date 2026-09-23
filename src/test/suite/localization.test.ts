@@ -91,13 +91,13 @@ suite("Review localization", () => {
     });
   }
 
-  test("gives automatically started Chinese sessions a Chinese title", async () => {
+  test("does not create a Codex timeline when a review starts", async () => {
     Object.defineProperty(vscode.env, "language", { value: "zh-cn", configurable: true });
     const store = new MemoryBaselineStore();
     const session = new ReviewSession(store, new DiffService(store));
     try {
       await session.start();
-      assert.strictEqual(session.agentSessions.getCurrentSession()?.title, "工作区会话");
+      assert.deepStrictEqual(session.agentSessions.getSessions(), []);
     } finally {
       session.dispose();
     }

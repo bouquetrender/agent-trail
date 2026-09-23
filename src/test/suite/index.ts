@@ -4,7 +4,7 @@ import Mocha from "mocha";
 export async function run(): Promise<void> {
   const mocha = new Mocha({ ui: "tdd", color: true });
   mocha.addFile(path.resolve(__dirname, "extension.test.js"));
-  mocha.addFile(path.resolve(__dirname, "terminal.test.js"));
+  mocha.addFile(path.resolve(__dirname, "codex.test.js"));
   mocha.addFile(path.resolve(__dirname, "localization.test.js"));
 
   await new Promise<void>((resolve, reject) => {

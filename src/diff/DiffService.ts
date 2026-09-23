@@ -3,12 +3,14 @@ import type { AgentFileChange, FileDiff } from "../model";
 import type { BaselineStore } from "../session/BaselineStore";
 import { AgentChangeHistory } from "./AgentChangeHistory";
 import { computeHunks } from "./computeHunks";
+import { readTextFile } from "../session/readTextFile";
 
 export class DiffService implements vscode.Disposable {
   private readonly fileDiffs = new Map<string, FileDiff>();
   private readonly history = new AgentChangeHistory();
   private hunkCount = 0;
   private generation = 0;
+  private readonly revisions = new Map<string, number>();
   private readonly changeEmitter = new vscode.EventEmitter<void>();
 
   readonly onDidChange = this.changeEmitter.event;
@@ -61,15 +63,41 @@ export class DiffService implements vscode.Disposable {
     return this.history.getHunk(uri.toString(), hunkId);
   }
 
-  async recompute(uri: vscode.Uri): Promise<void> {
+  removePending(uri: vscode.Uri): void {
+    this.revisions.set(uri.toString(), (this.revisions.get(uri.toString()) ?? 0) + 1);
+    if (this.fileDiffs.has(uri.toString())) {
+      this.updateFileDiff(uri.toString(), undefined);
+      this.changeEmitter.fire();
+    }
+  }
+
+  recordConfirmedChange(uri: vscode.Uri, before: string, after: string): void {
+    const hunks = computeHunks(uri.toString(), before, after);
+    if (hunks.length > 0) {
+      this.history.record({ uri: uri.toString(), hunks });
+      this.changeEmitter.fire();
+    }
+  }
+
+  async recompute(uri: vscode.Uri, expectedContent?: string): Promise<void> {
     const generation = this.generation;
+    const key = uri.toString();
+    const revision = (this.revisions.get(key) ?? 0) + 1;
+    this.revisions.set(key, revision);
+    const isCurrent = () => generation === this.generation && this.revisions.get(key) === revision;
     try {
       const baseline = await this.baselineStore.get(uri);
-      if (baseline === undefined || generation !== this.generation) {
+      if (baseline === undefined || !isCurrent()) {
         return;
       }
       const document = await vscode.workspace.openTextDocument(uri);
-      if (generation !== this.generation) {
+      const diskContent = expectedContent !== undefined && !document.isDirty ? await readTextFile(uri) : undefined;
+      if (!isCurrent()) {
+        return;
+      }
+      if (expectedContent !== undefined &&
+          ((!document.isDirty && diskContent !== expectedContent) || document.getText() !== expectedContent)) {
+        this.removePending(uri);
         return;
       }
       const hunks = computeHunks(uri.toString(), baseline, document.getText());
@@ -81,7 +109,7 @@ export class DiffService implements vscode.Disposable {
         this.history.record(fileDiff);
       }
     } catch {
-      if (generation !== this.generation) {
+      if (!isCurrent()) {
         return;
       }
       // Lifecycle history is recorded before unreadable files leave the reviewable set.
@@ -97,6 +125,7 @@ export class DiffService implements vscode.Disposable {
 
   clear(): void {
     this.generation++;
+    this.revisions.clear();
     if (this.fileDiffs.size === 0 && !this.history.hasChanges()) {
       return;
     }

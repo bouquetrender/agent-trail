@@ -18,8 +18,10 @@ export class SessionManager {
     title: string;
     agent?: string;
     provider?: string;
+    externalSessionId?: string;
+    startedAt?: number;
   }): AgentSession {
-    if (this.currentId) {
+    if (this.currentId && !options.externalSessionId) {
       throw new Error("End the current Agent Session before starting another.");
     }
     const session = {
@@ -27,7 +29,8 @@ export class SessionManager {
       title: options.title,
       agent: options.agent ?? "unknown",
       provider: options.provider ?? "unknown",
-      startedAt: this.now(),
+      externalSessionId: options.externalSessionId,
+      startedAt: options.startedAt ?? this.now(),
       status: "active" as const,
       summary: "",
     };
@@ -64,9 +67,9 @@ export class SessionManager {
     return event;
   }
 
-  endSession(summary = ""): AgentSession | undefined {
-    const session = this.getCurrentSession();
-    if (!session) {
+  endSession(summary = "", sessionId = this.currentId): AgentSession | undefined {
+    const session = sessionId ? this.getSession(sessionId) : undefined;
+    if (!session || session.status !== "active") {
       return undefined;
     }
     const endedAt = Math.max(
@@ -75,7 +78,9 @@ export class SessionManager {
     );
     const { events, ...metadata } = session;
     this.sessions.set(session.id, { ...metadata, status: "ended", endedAt, summary });
-    this.currentId = undefined;
+    if (this.currentId === session.id) {
+      this.currentId = [...this.sessions.values()].reverse().find((item) => item.status === "active")?.id;
+    }
     this.eventStore.append({
       id: randomUUID(),
       sessionId: session.id,
@@ -92,6 +97,12 @@ export class SessionManager {
     return this.currentId ? this.getSession(this.currentId) : undefined;
   }
 
+  endAllSessions(): void {
+    for (const session of this.sessions.values()) {
+      if (session.status === "active") { this.endSession("", session.id); }
+    }
+  }
+
   getSession(id: string): AgentSession | undefined {
     const session = this.sessions.get(id);
     return session ? { ...session, events: this.eventStore.getEvents(id) } : undefined;
@@ -105,7 +116,7 @@ export class SessionManager {
   }
 
   dispose(): void {
-    this.endSession();
+    this.endAllSessions();
     this.eventStore.dispose();
     this.sessions.clear();
   }

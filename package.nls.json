@@ -1,4 +1,6 @@
 {
+  "command.connectCodex": "AgentTrail: Connect Codex",
+  "welcome.codex": "Record only Codex tool activity. Connect this project, then review and trust the hooks in Codex.\n[Connect Codex](command:cursorForgery.connectCodex)",
   "command.endAgentSession": "AgentTrail: End Agent Session",
   "command.startSession": "AgentTrail: Start Session",
   "command.resetSession": "AgentTrail: Reset Session",
@@ -17,7 +19,7 @@
   "welcome.start": "Start a session to watch for agent changes.\n[Start Session](command:cursorForgery.startSession)",
   "welcome.workspace": "Open a workspace folder to start reviewing agent changes.\n[Open Folder](command:vscode.openFolder)",
   "welcome.capturing": "Capturing the review baseline… File changes will be monitored when capture finishes.",
-  "welcome.ready": "No pending changes. AgentTrail is watching for changes.",
+  "welcome.ready": "No confirmed Codex changes. Connect Codex and trust its hooks to begin.\n[Connect Codex](command:cursorForgery.connectCodex)",
   "menu.moreReviewActions": "More Review Actions",
   "extension.description": "Observe coding-agent activity and review every change."
 }

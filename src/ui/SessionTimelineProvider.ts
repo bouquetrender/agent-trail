@@ -4,6 +4,7 @@ import type { AgentEvent, AgentSession } from "../session/AgentSession";
 import type { SessionManager } from "../session/SessionManager";
 
 const eventLabels: Record<AgentEvent["type"], string> = {
+  "tool-call": "工具调用",
   "session-start": "会话开始",
   "session-end": "会话结束",
   "file-created": "文件新增",
@@ -24,6 +25,7 @@ function sourceLabel(source: string): string {
     case "filesystem": return localize(source, "文件系统");
     case "terminal": return localize(source, "终端");
     case "extension": return localize(source, "扩展");
+    case "codex-hook": return "Codex hook";
     case "unknown": return localize(source, "未知");
     default: return source;
   }
@@ -39,7 +41,7 @@ export class AgentSessionItem extends vscode.TreeItem {
     this.description = `${status} · ${localize(`${session.events.length} events`, `${session.events.length} 个事件`)}`;
     const agent = session.agent === "unknown" ? localize("unknown", "未知") : session.agent;
     const provider = session.provider === "unknown" ? localize("unknown", "未知") : session.provider;
-    this.tooltip = `${agent} / ${provider}\n${new Date(session.startedAt).toISOString()}${session.summary ? `\n${session.summary}` : ""}`;
+    this.tooltip = `${agent} / ${provider}\n${new Date(session.startedAt).toISOString()}${session.externalSessionId ? `\nCodex session: ${session.externalSessionId}` : ""}${session.summary ? `\n${session.summary}` : ""}`;
   }
 }
 
@@ -50,6 +52,27 @@ export class AgentEventItem extends vscode.TreeItem {
     const source = sourceLabel(event.source);
     const confidence = localize(event.confidence, confidenceLabels[event.confidence]);
     const provenance = `${localize("Source", "来源")}: ${source}\n${localize("Confidence", "可信来源")}: ${confidence}`;
+    if (event.type === "tool-call") {
+      const payload = event.payload;
+      const status = payload.phase === "requested"
+        ? localize("Requested; execution not confirmed", "已请求，尚未确认执行")
+        : payload.outcome === "succeeded" ? localize("Succeeded", "成功")
+          : payload.outcome === "failed" ? localize("Failed", "失败")
+            : localize("Result received; outcome unknown", "已返回结果，执行状态未知");
+      this.label = payload.command || payload.tool;
+      const details = [status, `${localize("cwd", "工作目录")}: ${payload.cwd}`];
+      if (payload.phase === "completed") {
+        details.push(`${localize("exit", "退出码")}: ${payload.exitCode ?? localize("unknown", "未知")}`);
+        details.push(`${localize("duration", "耗时")}: ${payload.durationMs === undefined
+          ? localize("unknown", "未知") : `${(payload.durationMs / 1000).toFixed(1)}${localize("s", "秒")}`}`);
+      }
+      this.description = details.join(" · ");
+      this.tooltip = [String(this.label), ...details, provenance,
+        `${localize("Time", "时间")}: ${new Date(event.timestamp).toISOString()}`,
+        `Codex turn: ${event.externalTurnId ?? ""}`, `Codex tool call: ${event.externalCallId ?? ""}`,
+      ].join("\n");
+      return;
+    }
     if (event.type === "command-start" || event.type === "command-end") {
       const payload = event.payload;
       const cwd = `${localize("cwd", "工作目录")}: ${payload.cwd ?? localize("unknown", "未知")}`;
