@@ -80,6 +80,13 @@ review the latest changes.
 Editing a file manually in VS Code takes ownership of that file. The extension
 updates its baseline and clears its pending review changes.
 
+Switching Git branches automatically starts a fresh review from the current
+workspace contents, clearing pending changes and History without reverting files.
+Previous Timeline sessions remain available. Ordinary commits on the same branch
+do not reset the review. Git worktrees and transitions to or from detached HEAD
+are also supported. In a multi-root workspace, switching branches in any root
+resets the review for the entire workspace.
+
 ## Codex context
 
 With the official Codex extension installed, select code and pause briefly to show

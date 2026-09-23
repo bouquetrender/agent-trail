@@ -28,8 +28,14 @@ export class BaselineContentProvider
     return source ? ((await this.baselineStore.get(source)) ?? "") : "";
   }
 
-  refresh(source: vscode.Uri): void {
-    this.changeEmitter.fire(this.createUri(source));
+  refresh(source?: vscode.Uri): void {
+    if (source) {
+      this.changeEmitter.fire(this.createUri(source));
+    } else {
+      for (const uri of this.sources.keys()) {
+        this.changeEmitter.fire(vscode.Uri.parse(uri));
+      }
+    }
   }
 
   dispose(): void {

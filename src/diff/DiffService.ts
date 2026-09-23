@@ -8,6 +8,7 @@ export class DiffService implements vscode.Disposable {
   private readonly fileDiffs = new Map<string, FileDiff>();
   private readonly history = new AgentChangeHistory();
   private hunkCount = 0;
+  private generation = 0;
   private readonly changeEmitter = new vscode.EventEmitter<void>();
 
   readonly onDidChange = this.changeEmitter.event;
@@ -61,12 +62,16 @@ export class DiffService implements vscode.Disposable {
   }
 
   async recompute(uri: vscode.Uri): Promise<void> {
+    const generation = this.generation;
     try {
       const baseline = await this.baselineStore.get(uri);
-      if (baseline === undefined) {
+      if (baseline === undefined || generation !== this.generation) {
         return;
       }
       const document = await vscode.workspace.openTextDocument(uri);
+      if (generation !== this.generation) {
+        return;
+      }
       const hunks = computeHunks(uri.toString(), baseline, document.getText());
       if (hunks.length === 0) {
         this.updateFileDiff(uri.toString(), undefined);
@@ -76,6 +81,9 @@ export class DiffService implements vscode.Disposable {
         this.history.record(fileDiff);
       }
     } catch {
+      if (generation !== this.generation) {
+        return;
+      }
       // Lifecycle history is recorded before unreadable files leave the reviewable set.
       this.updateFileDiff(uri.toString(), undefined);
     }
@@ -88,6 +96,7 @@ export class DiffService implements vscode.Disposable {
   }
 
   clear(): void {
+    this.generation++;
     if (this.fileDiffs.size === 0 && !this.history.hasChanges()) {
       return;
     }
@@ -98,6 +107,7 @@ export class DiffService implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.generation++;
     this.changeEmitter.dispose();
   }
 

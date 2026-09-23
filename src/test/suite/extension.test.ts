@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import { execFileSync } from "child_process";
 import { readFileSync } from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -439,6 +440,171 @@ suite("Agent Diff Review extension", () => {
     await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(ORIGINAL));
     await waitForWatcher();
     assert.strictEqual((await getCodeLenses(sampleUri)).length, 3);
+  });
+
+  test("restarts review from the checked-out branch without changing files or the real index", async function () {
+    this.timeout(15_000);
+    const git = (...args: string[]): string => execFileSync("git", [
+      "-c", "user.name=Agent Review Test", "-c", "user.email=review@example.test",
+      "-c", "commit.gpgsign=false", ...args,
+    ], { cwd: workspaceFolder.uri.fsPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    const originalBranch = git("symbolic-ref", "--short", "HEAD");
+    const branchAdded = vscode.Uri.joinPath(workspaceFolder.uri, "branch-added.txt");
+    const branchDeleted = vscode.Uri.joinPath(workspaceFolder.uri, "branch-deleted.txt");
+    const store = new WorkspaceBaselineStore();
+    const diffs = new DiffService(store);
+    const session = new ReviewSession(store, diffs);
+    const baselineProvider = new BaselineContentProvider(store);
+    const sampleBaseline = baselineProvider.createUri(sampleUri);
+    const deletedBaseline = baselineProvider.createUri(branchDeleted);
+    const refreshed = new Set<string>();
+    const subscription = session.onDidAdvanceBaseline((uri) => baselineProvider.refresh(uri));
+    const refreshSubscription = baselineProvider.onDidChange((uri) => refreshed.add(uri.toString()));
+    try {
+      git("add", "sample.txt", "second.txt");
+      git("commit", "--quiet", "-m", "Branch test base");
+      git("switch", "--quiet", "-c", "review-base");
+      await vscode.workspace.fs.writeFile(branchDeleted, Buffer.from("old branch\n"));
+      git("add", "branch-deleted.txt");
+      git("commit", "--quiet", "-m", "Old branch file");
+      git("switch", "--quiet", "-c", "review-target");
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+      await vscode.workspace.fs.writeFile(branchAdded, Buffer.from("new branch\n"));
+      await vscode.workspace.fs.delete(branchDeleted);
+      git("add", "sample.txt", "branch-added.txt", "branch-deleted.txt");
+      git("commit", "--quiet", "-m", "Target branch files");
+      git("switch", "--quiet", "review-base");
+      await waitForWatcher();
+      await session.start();
+      const previousId = session.agentSessions.getCurrentSession()?.id;
+      assert.ok(previousId);
+
+      await vscode.workspace.fs.writeFile(secondUri, Buffer.from(SECOND_MODIFIED));
+      await vscode.workspace.fs.writeFile(createdUri, Buffer.from("carried untracked file\n"));
+      await waitForWatcher();
+      assert.ok(diffs.get(secondUri));
+      assert.ok(diffs.hasWholeFileChange(createdUri, "added"));
+      refreshed.clear();
+
+      git("switch", "--quiet", "review-target");
+      const indexAfterCheckout = readFileSync(path.join(workspaceFolder.uri.fsPath, ".git", "index"));
+      const deadline = Date.now() + 5_000;
+      while (
+        (session.getState() !== "ready" || session.agentSessions.getCurrentSession()?.id === previousId) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.strictEqual(session.getState(), "ready");
+      assert.notStrictEqual(session.agentSessions.getCurrentSession()?.id, previousId);
+      await waitForWatcher();
+      assert.strictEqual(session.agentSessions.getSession(previousId)?.status, "ended");
+      assert.strictEqual(await store.get(sampleUri), MODIFIED);
+      assert.strictEqual(await store.get(secondUri), SECOND_MODIFIED);
+      assert.strictEqual(await store.get(createdUri), "carried untracked file\n");
+      assert.strictEqual(await store.get(branchAdded), "new branch\n");
+      assert.strictEqual(store.has(branchDeleted), false);
+      assert.strictEqual(diffs.getFileCount(), 0);
+      assert.strictEqual(diffs.hasAgentChanges(), false);
+      assert.ok(refreshed.has(sampleBaseline.toString()));
+      assert.ok(refreshed.has(deletedBaseline.toString()));
+      assert.strictEqual(await baselineProvider.provideTextDocumentContent(sampleBaseline), MODIFIED);
+      assert.strictEqual(await baselineProvider.provideTextDocumentContent(deletedBaseline), "");
+      assert.deepStrictEqual(
+        readFileSync(path.join(workspaceFolder.uri.fsPath, ".git", "index")), indexAfterCheckout,
+      );
+      assert.strictEqual(readFileSync(sampleUri.fsPath, "utf8"), MODIFIED);
+      assert.strictEqual(readFileSync(secondUri.fsPath, "utf8"), SECOND_MODIFIED);
+
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from("new agent change\n"));
+      await waitForWatcher();
+      assert.ok(diffs.get(sampleUri));
+      const provider = new BaselineContentProvider(store);
+      try {
+        await new FileCommands(store, diffs, session, provider).rejectFile(sampleUri);
+        assert.strictEqual((await vscode.workspace.openTextDocument(sampleUri)).getText(), MODIFIED);
+        assert.strictEqual(diffs.get(sampleUri), undefined);
+      } finally {
+        provider.dispose();
+      }
+    } finally {
+      subscription.dispose();
+      refreshSubscription.dispose();
+      baselineProvider.dispose();
+      session.dispose();
+      await replaceAndSave(sampleUri, MODIFIED);
+      await replaceAndSave(secondUri, SECOND_ORIGINAL);
+      git("switch", "--quiet", originalBranch);
+      await waitForWatcher();
+    }
+  });
+
+  test("repeats an in-progress capture when the branch changes before it finishes", async function () {
+    this.timeout(10_000);
+    const git = (...args: string[]): string => execFileSync("git", args, {
+      cwd: workspaceFolder.uri.fsPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    const originalBranch = git("symbolic-ref", "--short", "HEAD");
+    const store = new MemoryBaselineStore();
+    const session = new ReviewSession(store, new DiffService(store));
+    let releaseCapture: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => { releaseCapture = resolve; });
+    let captured: (() => void) | undefined;
+    const firstCapture = new Promise<void>((resolve) => { captured = resolve; });
+    let reset: ReturnType<ReviewSession["start"]> | undefined;
+    try {
+      await session.start();
+      const capture = store.capture.bind(store);
+      let captures = 0;
+      store.capture = async (options) => {
+        await capture(options);
+        if (++captures === 1) {
+          captured?.();
+          await blocked;
+        }
+      };
+      reset = session.start();
+      await firstCapture;
+      git("switch", "--quiet", "-c", "review-during-capture");
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+      await waitForWatcher();
+      releaseCapture?.();
+      await reset;
+      assert.strictEqual(captures, 2);
+      assert.strictEqual(session.agentSessions.getSessions().length, 2);
+      assert.strictEqual(session.getState(), "ready");
+      assert.strictEqual(await store.get(sampleUri), MODIFIED);
+      assert.strictEqual(session.diffs.hasAgentChanges(), false);
+    } finally {
+      releaseCapture?.();
+      await reset;
+      session.dispose();
+      await replaceAndSave(sampleUri, ORIGINAL);
+      git("switch", "--quiet", originalBranch);
+      await waitForWatcher();
+    }
+  });
+
+  test("does not restore stale diffs when an old baseline read finishes after reset", async () => {
+    const store = new MemoryBaselineStore();
+    const diffs = new DiffService(store);
+    try {
+      await store.capture({ uris: [sampleUri] });
+      await vscode.workspace.fs.writeFile(sampleUri, Buffer.from(MODIFIED));
+      await waitForWatcher();
+      let finishRead: ((content: string) => void) | undefined;
+      store.get = () => new Promise<string>((resolve) => { finishRead = resolve; });
+      const pending = diffs.recompute(sampleUri);
+      assert.ok(finishRead);
+      diffs.clear();
+      finishRead(ORIGINAL);
+      await pending;
+      assert.strictEqual(diffs.getFileCount(), 0);
+      assert.strictEqual(diffs.hasAgentChanges(), false);
+    } finally {
+      diffs.dispose();
+      store.clear();
+    }
   });
 
   test("separates pending and historical changes and opens their tree rows", async () => {
