@@ -19,12 +19,18 @@ export type AgentEventData =
         readonly commandId: string;
         readonly command: string;
         readonly cwd?: string;
+        readonly startedAt: number;
       };
     }
   | {
       readonly type: "command-end";
       readonly payload: {
         readonly commandId: string;
+        readonly command: string;
+        readonly cwd?: string;
+        readonly startedAt: number;
+        readonly endedAt: number;
+        readonly duration: number;
         readonly exitCode: number | undefined;
       };
     };

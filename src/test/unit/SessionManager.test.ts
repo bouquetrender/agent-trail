@@ -8,11 +8,11 @@ suite("Agent Sessions", () => {
     const store = new EventStore();
     const manager = new SessionManager(store, () => now);
     const started = manager.startSession({ title: "Implement feature", agent: "Codex", provider: "OpenAI" });
-    manager.recordEvent({ type: "command-start", timestamp: 120, source: "agent", confidence: "reported", payload: { commandId: "cmd-1", command: "npm test" } });
+    manager.recordEvent({ type: "command-start", timestamp: 120, source: "agent", confidence: "reported", payload: { commandId: "cmd-1", command: "npm test", startedAt: 120 } });
     manager.recordEvent({ type: "file-created", timestamp: 110, source: "filesystem", confidence: "observed", payload: { uri: "file:///new.txt" } });
     manager.recordEvent({ type: "file-modified", timestamp: 130, source: "filesystem", confidence: "observed", payload: { uri: "file:///new.txt" } });
     manager.recordEvent({ type: "file-deleted", timestamp: 130, source: "filesystem", confidence: "observed", payload: { uri: "file:///new.txt" } });
-    manager.recordEvent({ type: "command-end", timestamp: 140, source: "agent", confidence: "reported", payload: { commandId: "cmd-1", exitCode: 0 } });
+    manager.recordEvent({ type: "command-end", timestamp: 140, source: "agent", confidence: "reported", payload: { commandId: "cmd-1", command: "npm test", startedAt: 120, endedAt: 140, duration: 20, exitCode: 0 } });
     now = 150;
     const ended = manager.endSession("Implemented and tested");
     assert.ok(ended);

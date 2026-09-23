@@ -12,6 +12,7 @@ import { tmpdir } from "os";
 import * as path from "path";
 import { TextDecoder } from "util";
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type {
   BaselineCaptureOptions,
   BaselineStore,
@@ -94,9 +95,9 @@ export class GitBaselineStore implements BaselineStore {
   async capture(options?: BaselineCaptureOptions): Promise<void> {
     this.entries.clear();
     this.treeId = undefined;
-    options?.report?.("Discovering Git workspace files…");
+    options?.report?.(localize("Discovering Git workspace files…", "正在查找 Git 工作区文件…"));
     const uris = options?.uris ?? (await this.discoverUris());
-    options?.report?.(`Preparing isolated Git index for ${uris.length} files…`);
+    options?.report?.(localize(`Preparing isolated Git index for ${uris.length} files…`, `正在准备 ${uris.length} 个文件的审查基线…`));
 
     if (existsSync(this.realIndexPath)) {
       copyFileSync(this.realIndexPath, this.indexPath);
@@ -115,7 +116,7 @@ export class GitBaselineStore implements BaselineStore {
     }
 
     if (paths.length > 0) {
-      options?.report?.("Writing workspace state to temporary Git tree…");
+      options?.report?.(localize("Writing workspace state to temporary Git tree…", "正在保存工作区基线…"));
       await this.git(
         [
           "add",

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import { DiffService } from "../diff/DiffService";
 import type { BaselineStore } from "./BaselineStore";
 import { EventStore } from "./EventStore";
@@ -82,7 +83,7 @@ export class ReviewSession implements vscode.Disposable {
   ): Promise<{ fileCount: number; kind: "git" | "memory" }> {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders?.length) {
-      throw new Error("Open a workspace folder before starting an Agent Review session.");
+      throw new Error(localize("Open a workspace folder before starting an AgentTrail session.", "请先打开工作区文件夹，再开始审查会话。"));
     }
 
     const stopping = this.collector.stop();
@@ -118,8 +119,8 @@ export class ReviewSession implements vscode.Disposable {
         return { fileCount: 0, kind: this.baselineStore.kind };
       }
       this.baselineChangeEmitter.fire(undefined);
-      report?.("Starting filesystem watcher…");
-      this.agentSessions.startSession({ title: "Workspace Session" });
+      report?.(localize("Starting filesystem watcher…", "正在开始监听文件变化…"));
+      this.agentSessions.startSession({ title: localize("Workspace Session", "工作区会话") });
       this.collector.start();
       this.active = true;
       this.setState("ready");
@@ -247,7 +248,7 @@ export class ReviewSession implements vscode.Disposable {
         void this.advanceBaselineForUserEdit(document).catch((error) => {
           const message = error instanceof Error ? error.message : String(error);
           void vscode.window.showErrorMessage(
-            `Agent Review could not record the user edit: ${message}`,
+            localize(`AgentTrail could not record the user edit: ${message}`, `无法记录用户编辑：${message}`),
           );
         });
       }, 100),
@@ -305,7 +306,7 @@ export class ReviewSession implements vscode.Disposable {
   private reportBranchError(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     void vscode.window.showErrorMessage(
-      `Agent Review could not restart after a Git branch change: ${message}`,
+      localize(`AgentTrail could not restart after a Git branch change: ${message}`, `切换 Git 分支后无法重新开始审查：${message}`),
     );
   }
 }

@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-`cursor-forgery` 是一个 VS Code 扩展，使用 TypeScript、CommonJS 和 VS Code 1.85 API。
+`AgentTrail` 是一个 VS Code 扩展，使用 TypeScript、CommonJS 和 VS Code 1.85 API。
 扩展用于为外部编程智能体产生的文本文件改动提供基线、差异审查和接受/拒绝操作；不调用 AI API。
 
 ### 目录职责

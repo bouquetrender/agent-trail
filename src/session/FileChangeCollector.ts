@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type { DiffService } from "../diff/DiffService";
 import type { AgentEventInput } from "./AgentSession";
 import type { BaselineStore } from "./BaselineStore";
@@ -102,7 +103,7 @@ export class FileChangeCollector implements vscode.Disposable {
       }
     }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      void vscode.window.showErrorMessage(`Agent Lens could not collect a file change: ${message}`);
+      void vscode.window.showErrorMessage(localize(`AgentTrail could not collect a file change: ${message}`, `AgentTrail 无法记录文件变化：${message}`));
     });
   }
 }

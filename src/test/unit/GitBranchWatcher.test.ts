@@ -71,7 +71,7 @@ suite("Git branch watcher", () => {
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", [
-    "-c", "user.name=Agent Review Test", "-c", "user.email=review@example.test",
+    "-c", "user.name=AgentTrail Test", "-c", "user.email=review@example.test",
     "-c", "commit.gpgsign=false", ...args,
   ], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }

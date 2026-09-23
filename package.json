@@ -1,8 +1,8 @@
 {
-  "name": "cursor-forgery",
-  "displayName": "cursor-forgery",
-  "description": "Emulate Cursor-style editor interactions for Codex context and agent change review.",
-  "version": "0.2.0",
+  "name": "agent-trail",
+  "displayName": "AgentTrail",
+  "description": "%extension.description%",
+  "version": "1.0.0",
   "publisher": "local",
   "author": "liujw",
   "repository": {
@@ -27,109 +27,109 @@
     "commands": [
       {
         "command": "cursorForgery.endAgentSession",
-        "title": "Agent Lens: End Agent Session",
-        "icon": "$(debug-stop)",
+        "title": "%command.endAgentSession%",
+        "icon": "$(pass)",
         "enablement": "cursorForgery.agentSessionActive && cursorForgery.sessionState == ready"
       },
       {
         "command": "cursorForgery.startSession",
-        "title": "Agent Review: Start Session",
+        "title": "%command.startSession%",
         "enablement": "cursorForgery.sessionState != capturing"
       },
       {
         "command": "cursorForgery.resetSession",
-        "title": "Agent Review: Reset Session",
+        "title": "%command.resetSession%",
         "icon": "$(clear-all)",
         "enablement": "cursorForgery.sessionState == ready"
       },
       {
         "command": "cursorForgery.acceptHunk",
-        "title": "Agent Review: Accept Hunk",
+        "title": "%command.acceptHunk%",
         "icon": "$(check)"
       },
       {
         "command": "cursorForgery.rejectHunk",
-        "title": "Agent Review: Reject Hunk",
+        "title": "%command.rejectHunk%",
         "icon": "$(discard)"
       },
       {
         "command": "cursorForgery.requestHunkChange",
-        "title": "Agent Review: Request Change",
+        "title": "%command.requestHunkChange%",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "cursorForgery.openHunkDiff",
-        "title": "Agent Review: View Before ↔ After"
+        "title": "%command.openHunkDiff%"
       },
       {
         "command": "cursorForgery.openHunk",
-        "title": "Agent Review: Open Change"
+        "title": "%command.openHunk%"
       },
       {
         "command": "cursorForgery.acceptFile",
-        "title": "Agent Review: Accept File",
+        "title": "%command.acceptFile%",
         "icon": "$(check-all)"
       },
       {
         "command": "cursorForgery.rejectFile",
-        "title": "Agent Review: Reject File",
+        "title": "%command.rejectFile%",
         "icon": "$(discard)"
       },
       {
         "command": "cursorForgery.acceptAll",
-        "title": "Agent Review: Accept All",
+        "title": "%command.acceptAll%",
         "icon": "$(check-all)",
         "enablement": "cursorForgery.hasPendingChanges"
       },
       {
         "command": "cursorForgery.rejectAll",
-        "title": "Agent Review: Reject All",
+        "title": "%command.rejectAll%",
         "icon": "$(trash)",
         "enablement": "cursorForgery.hasPendingChanges"
       },
       {
         "command": "cursorForgery.addToCodexThread",
-        "title": "Add to Codex Thread"
+        "title": "%command.addToCodexThread%"
       }
     ],
     "views": {
       "explorer": [
         {
           "id": "cursorForgery.changes",
-          "name": "AGENT CHANGES"
+          "name": "%view.changes%"
         },
         {
           "id": "cursorForgery.timeline",
-          "name": "SESSION TIMELINE"
+          "name": "%view.timeline%"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "cursorForgery.changes",
-        "contents": "Start a session to watch for agent changes.\n[Start Session](command:cursorForgery.startSession)",
+        "contents": "%welcome.start%",
         "when": "cursorForgery.sessionState != capturing && cursorForgery.sessionState != ready && workspaceFolderCount > 0"
       },
       {
         "view": "cursorForgery.changes",
-        "contents": "Open a workspace folder to start reviewing agent changes.\n[Open Folder](command:vscode.openFolder)",
+        "contents": "%welcome.workspace%",
         "when": "workspaceFolderCount == 0"
       },
       {
         "view": "cursorForgery.changes",
-        "contents": "Capturing the review baseline… File changes will be monitored when capture finishes.",
+        "contents": "%welcome.capturing%",
         "when": "cursorForgery.sessionState == capturing"
       },
       {
         "view": "cursorForgery.changes",
-        "contents": "No pending changes. Agent Review is watching for changes.",
+        "contents": "%welcome.ready%",
         "when": "cursorForgery.sessionState == ready"
       }
     ],
     "submenus": [
       {
         "id": "cursorForgery.moreReviewActions",
-        "label": "More Review Actions"
+        "label": "%menu.moreReviewActions%"
       }
     ],
     "menus": {

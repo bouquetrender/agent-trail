@@ -1,20 +1,21 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type { DiffService } from "../diff/DiffService";
 import type { AgentFileChangeKind, DiffHunk, FileDiff } from "../model";
 
 export class CurrentTurnItem extends vscode.TreeItem {
   constructor() {
-    super("Pending Review", vscode.TreeItemCollapsibleState.Expanded);
+    super(localize("Pending Review", "待审查"), vscode.TreeItemCollapsibleState.Expanded);
     this.id = "pending";
   }
 }
 
 export class AllAgentChangesItem extends vscode.TreeItem {
   constructor() {
-    super("History", vscode.TreeItemCollapsibleState.Collapsed);
+    super(localize("History", "历史记录"), vscode.TreeItemCollapsibleState.Collapsed);
     this.id = "history";
-    this.description = "Reference only";
-    this.tooltip = "Recorded changes from this session, including reviewed changes. Opens the current file; historical line positions may have shifted.";
+    this.description = localize("Reference only", "仅供参考");
+    this.tooltip = localize("Recorded changes from this session, including reviewed changes. Opens the current file; historical line positions may have shifted.", "本次会话的变更记录，包含已审查的变更。点击打开当前文件，历史行号可能已经变化。");
   }
 }
 
@@ -39,24 +40,24 @@ export class FileChangeItem extends vscode.TreeItem {
     this.id = `${reviewable ? "pending" : "history"}:${kind}:${uri.toString()}`;
     this.resourceUri = uri;
     if (kind === "modified") {
-      this.description = `${fileDiff.hunks.length} hunk${
+      this.description = localize(`${fileDiff.hunks.length} hunk${
         fileDiff.hunks.length === 1 ? "" : "s"
-      }`;
+      }`, `${fileDiff.hunks.length} 处变更`);
       this.tooltip = uri.fsPath;
     } else {
-      this.description = kind === "added" ? "Added" : "Deleted";
+      this.description = kind === "added" ? localize("Added", "新增") : localize("Deleted", "删除");
       this.tooltip = `${uri.fsPath} (${this.description})`;
     }
     if (!reviewable) {
-      this.tooltip = `${this.tooltip}\nReference only. Opens the current file; historical line positions may have shifted.`;
+      this.tooltip = `${this.tooltip}\n${localize("Reference only. Opens the current file; historical line positions may have shifted.", "仅供参考。点击打开当前文件，历史行号可能已经变化。")}`;
     } else {
-      this.tooltip = `${this.tooltip}\nAccept advances the review baseline; editor Undo cannot undo acceptance.`;
+      this.tooltip = `${this.tooltip}\n${localize("Accept advances the review baseline; editor Undo cannot undo acceptance.", "接受变更会更新审查基线，编辑器的撤销操作无法撤销接受。")}`;
     }
     const firstHunk = fileDiff.hunks[0];
     if (firstHunk) {
       this.command = {
         command: "cursorForgery.openHunk",
-        title: "Open First Change",
+        title: localize("Open First Change", "打开首处变更"),
         arguments: [uri.toString(), firstHunk.id, !reviewable],
       };
     }
@@ -79,12 +80,12 @@ export class HunkChangeItem extends vscode.TreeItem {
     this.description = summarizeHunk(hunk);
     this.command = {
       command: "cursorForgery.openHunk",
-      title: "Open Change",
+      title: localize("Open Change", "打开变更"),
       arguments: [uri.toString(), hunk.id, !reviewable],
     };
     if (!reviewable) {
       this.iconPath = new vscode.ThemeIcon("diff");
-      this.tooltip = "Reference only. Opens the current file; historical line positions may have shifted.";
+      this.tooltip = localize("Reference only. Opens the current file; historical line positions may have shifted.", "仅供参考。点击打开当前文件，历史行号可能已经变化。");
     }
   }
 

@@ -1,0 +1,23 @@
+{
+  "command.endAgentSession": "AgentTrail: End Agent Session",
+  "command.startSession": "AgentTrail: Start Session",
+  "command.resetSession": "AgentTrail: Reset Session",
+  "command.acceptHunk": "AgentTrail: Accept Hunk",
+  "command.rejectHunk": "AgentTrail: Reject Hunk",
+  "command.requestHunkChange": "AgentTrail: Request Change",
+  "command.openHunkDiff": "AgentTrail: View Before ↔ After",
+  "command.openHunk": "AgentTrail: Open Change",
+  "command.acceptFile": "AgentTrail: Accept File",
+  "command.rejectFile": "AgentTrail: Reject File",
+  "command.acceptAll": "AgentTrail: Accept All",
+  "command.rejectAll": "AgentTrail: Reject All",
+  "command.addToCodexThread": "Add to Codex Thread",
+  "view.changes": "AGENT CHANGES",
+  "view.timeline": "SESSION TIMELINE",
+  "welcome.start": "Start a session to watch for agent changes.\n[Start Session](command:cursorForgery.startSession)",
+  "welcome.workspace": "Open a workspace folder to start reviewing agent changes.\n[Open Folder](command:vscode.openFolder)",
+  "welcome.capturing": "Capturing the review baseline… File changes will be monitored when capture finishes.",
+  "welcome.ready": "No pending changes. AgentTrail is watching for changes.",
+  "menu.moreReviewActions": "More Review Actions",
+  "extension.description": "Observe coding-agent activity and review every change."
+}

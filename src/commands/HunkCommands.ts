@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type { DiffService } from "../diff/DiffService";
 import { mergeAcceptedHunk } from "../diff/computeHunks";
 import type { BaselineStore } from "../session/BaselineStore";
@@ -55,7 +56,7 @@ export class HunkCommands {
     );
     const applied = await this.session.applyReviewEdit(edit, [uri]);
     if (!applied) {
-      void vscode.window.showErrorMessage("Agent Review could not reject this hunk.");
+      void vscode.window.showErrorMessage(localize("AgentTrail could not reject this hunk.", "无法拒绝此处变更。"));
       return;
     }
     await this.session.recompute(uri);
@@ -71,7 +72,7 @@ export class HunkCommands {
     }
     if (!vscode.extensions.getExtension("openai.chatgpt")) {
       void vscode.window.showInformationMessage(
-        "Install and enable the Codex extension to request a change.",
+        localize("Install and enable the Codex extension to request a change.", "请安装并启用 Codex 扩展以请求修改。"),
       );
       return;
     }
@@ -112,7 +113,7 @@ export class HunkCommands {
       "vscode.diff",
       this.baselineProvider.createUri(uri),
       uri,
-      `${vscode.workspace.asRelativePath(uri)} (Baseline ↔ Current)`,
+      `${vscode.workspace.asRelativePath(uri)} (${localize("Baseline ↔ Current", "基线 ↔ 当前")})`,
       {
         preview: true,
         selection: new vscode.Range(line, 0, line, 0),
@@ -156,7 +157,7 @@ export class HunkCommands {
     );
     if (historical || !this.diffs.getHunk(uri, hunk.id)) {
       void vscode.window.showInformationMessage(
-        "History is for reference only. Showing the current file; the recorded line position may have shifted.",
+        localize("History is for reference only. Showing the current file; the recorded line position may have shifted.", "历史记录仅供参考。当前打开的是现有文件，记录的行号可能已经变化。"),
       );
     }
   }
@@ -207,7 +208,7 @@ export class HunkCommands {
 
   private showNoHunkMessage(): void {
     void vscode.window.showInformationMessage(
-      "Select a hunk in AGENT CHANGES, or place the cursor in a file with one hunk.",
+      localize("Select a hunk in AGENT CHANGES, or place the cursor in a file with one hunk.", "请在“智能体变更”中选择一处变更，或将光标放入仅有一处变更的文件。"),
     );
   }
 }

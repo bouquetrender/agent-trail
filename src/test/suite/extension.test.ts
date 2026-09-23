@@ -28,7 +28,7 @@ const MODIFIED = "alpha\nBETA\ngamma\n";
 const SECOND_ORIGINAL = "red\ngreen\nblue\n";
 const SECOND_MODIFIED = "red\nGREEN\nblue\n";
 
-suite("Agent Diff Review extension", () => {
+suite("AgentTrail extension", () => {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(workspaceFolder);
   const sampleUri = vscode.Uri.joinPath(workspaceFolder.uri, "sample.txt");
@@ -107,7 +107,7 @@ suite("Agent Diff Review extension", () => {
     const originalGetExtension = vscode.extensions.getExtension;
     try {
       vscode.extensions.getExtension = <T>(id: string) => originalGetExtension<T>(
-        id === "openai.chatgpt" ? "local.cursor-forgery" : id,
+        id === "openai.chatgpt" ? "local.agent-trail" : id,
       );
       editor.selection = new vscode.Selection(1, 0, 2, 0);
       const hover = provider.provideHover(document, editor.selection.active);
@@ -152,7 +152,7 @@ suite("Agent Diff Review extension", () => {
     const hoverArgs: unknown[][] = [];
     try {
       vscode.extensions.getExtension = <T>(id: string) => originalGetExtension<T>(
-        id === "openai.chatgpt" ? "local.cursor-forgery" : id,
+        id === "openai.chatgpt" ? "local.agent-trail" : id,
       );
       vscode.commands.executeCommand = <T>(command: string, ...args: unknown[]) => {
         if (command === "editor.action.showHover") {
@@ -445,7 +445,7 @@ suite("Agent Diff Review extension", () => {
   test("restarts review from the checked-out branch without changing files or the real index", async function () {
     this.timeout(15_000);
     const git = (...args: string[]): string => execFileSync("git", [
-      "-c", "user.name=Agent Review Test", "-c", "user.email=review@example.test",
+      "-c", "user.name=AgentTrail Test", "-c", "user.email=review@example.test",
       "-c", "commit.gpgsign=false", ...args,
     ], { cwd: workspaceFolder.uri.fsPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
     const originalBranch = git("symbolic-ref", "--short", "HEAD");
@@ -1071,7 +1071,7 @@ suite("Agent Diff Review extension", () => {
     const originalGetExtension = vscode.extensions.getExtension;
     try {
       vscode.extensions.getExtension = <T>(id: string) => originalGetExtension<T>(
-        id === "openai.chatgpt" ? "local.cursor-forgery" : id,
+        id === "openai.chatgpt" ? "local.agent-trail" : id,
       );
       await vscode.commands.executeCommand(
         "cursorForgery.requestHunkChange", ...lens.command.arguments,

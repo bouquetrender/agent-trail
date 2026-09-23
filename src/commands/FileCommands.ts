@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type { DiffService } from "../diff/DiffService";
 import type { BaselineStore } from "../session/BaselineStore";
 import type { ReviewSession } from "../session/ReviewSession";
@@ -39,7 +40,7 @@ export class FileCommands {
     const edit = new vscode.WorkspaceEdit();
     edit.replace(uri, fullDocumentRange(document), baseline);
     if (!(await this.session.applyReviewEdit(edit, [uri]))) {
-      void vscode.window.showErrorMessage("Agent Review could not reject this file.");
+      void vscode.window.showErrorMessage(localize("AgentTrail could not reject this file.", "无法拒绝此文件的变更。"));
       return;
     }
     await this.session.recompute(uri);
@@ -78,12 +79,12 @@ export class FileCommands {
     if (reviewable.length === 0) {
       return;
     }
-    const action = `Reject ${reviewable.length} File${reviewable.length === 1 ? "" : "s"}`;
+    const action = localize(`Reject ${reviewable.length} File${reviewable.length === 1 ? "" : "s"}`, `拒绝 ${reviewable.length} 个文件的变更`);
     const choice = await vscode.window.showWarningMessage(
-      `Reject all pending changes in ${reviewable.length} file${reviewable.length === 1 ? "" : "s"}?`,
+      localize(`Reject all pending changes in ${reviewable.length} file${reviewable.length === 1 ? "" : "s"}?`, `是否拒绝 ${reviewable.length} 个文件的所有待审查变更？`),
       {
         modal: true,
-        detail: "This replaces the current contents of these files with their review baselines.",
+        detail: localize("This replaces the current contents of these files with their review baselines.", "这会用审查基线替换这些文件的当前内容。"),
       },
       action,
     );
@@ -101,7 +102,7 @@ export class FileCommands {
       )
     ) {
       void vscode.window.showWarningMessage(
-        "Files or review baselines changed while confirmation was open. Review the latest changes and try again.",
+        localize("Files or review baselines changed while confirmation was open. Review the latest changes and try again.", "确认期间文件或审查基线已变化，请检查最新变更后重试。"),
       );
       return;
     }
@@ -110,7 +111,7 @@ export class FileCommands {
     }
     const reviewedUris = reviewable.map(({ uri }) => uri);
     if (!(await this.session.applyReviewEdit(edit, reviewedUris))) {
-      void vscode.window.showErrorMessage("Agent Review could not reject all changes.");
+      void vscode.window.showErrorMessage(localize("AgentTrail could not reject all changes.", "无法拒绝全部变更。"));
       return;
     }
     await Promise.all(reviewedUris.map((uri) => this.session.recompute(uri)));
@@ -137,7 +138,7 @@ export class FileCommands {
 
   private showNoFileMessage(): void {
     void vscode.window.showInformationMessage(
-      "Open or select a file with Agent Review changes first.",
+      localize("Open or select a file with AgentTrail changes first.", "请先打开或选择一个包含待审查变更的文件。"),
     );
   }
 }

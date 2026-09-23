@@ -19,6 +19,7 @@ async function main(): Promise<void> {
   try {
     await runTests({
       version: "1.85.2",
+      vscodeExecutablePath: process.env.VSCODE_EXECUTABLE_PATH,
       extensionDevelopmentPath,
       extensionTestsPath,
       launchArgs: [workspacePath, "--disable-extensions"],

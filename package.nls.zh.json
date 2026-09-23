@@ -1,0 +1,23 @@
+{
+  "command.endAgentSession": "AgentTrail：结束会话",
+  "command.startSession": "AgentTrail：开始会话",
+  "command.resetSession": "AgentTrail：重置会话",
+  "command.acceptHunk": "AgentTrail：接受此处变更",
+  "command.rejectHunk": "AgentTrail：拒绝此处变更",
+  "command.requestHunkChange": "AgentTrail：请求修改",
+  "command.openHunkDiff": "AgentTrail：查看修改前后对比",
+  "command.openHunk": "AgentTrail：打开变更",
+  "command.acceptFile": "AgentTrail：接受文件变更",
+  "command.rejectFile": "AgentTrail：拒绝文件变更",
+  "command.acceptAll": "AgentTrail：接受全部变更",
+  "command.rejectAll": "AgentTrail：拒绝全部变更",
+  "command.addToCodexThread": "添加到 Codex 对话",
+  "view.changes": "智能体变更",
+  "view.timeline": "会话时间线",
+  "welcome.start": "开始会话以监听智能体变更。\n[开始会话](command:cursorForgery.startSession)",
+  "welcome.workspace": "打开工作区文件夹以开始审查智能体变更。\n[打开文件夹](command:vscode.openFolder)",
+  "welcome.capturing": "正在捕获审查基线…完成后将开始监听文件变化。",
+  "welcome.ready": "暂无待审查变更，正在监听文件变化。",
+  "menu.moreReviewActions": "更多审查操作",
+  "extension.description": "观察智能体行为，审查每一步变更。"
+}

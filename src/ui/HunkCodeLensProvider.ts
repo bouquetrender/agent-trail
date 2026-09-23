@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type { DiffService } from "../diff/DiffService";
 
 export class HunkCodeLensProvider
@@ -25,17 +26,17 @@ export class HunkCodeLensProvider
       const args: [string, string] = [hunk.uri, hunk.id];
       return [
         new vscode.CodeLens(range, {
-          title: "$(diff) Before ↔ After",
+          title: localize("$(diff) Before ↔ After", "$(diff) 修改前 ↔ 修改后"),
           command: "cursorForgery.openHunkDiff",
           arguments: args,
         }),
         new vscode.CodeLens(range, {
-          title: "$(check) Accept",
+          title: localize("$(check) Accept", "$(check) 接受"),
           command: "cursorForgery.acceptHunk",
           arguments: args,
         }),
         new vscode.CodeLens(range, {
-          title: "$(discard) Reject",
+          title: localize("$(discard) Reject", "$(discard) 拒绝"),
           command: "cursorForgery.rejectHunk",
           arguments: args,
         }),

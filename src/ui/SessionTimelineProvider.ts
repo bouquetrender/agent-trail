@@ -1,6 +1,33 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type { AgentEvent, AgentSession } from "../session/AgentSession";
 import type { SessionManager } from "../session/SessionManager";
+
+const eventLabels: Record<AgentEvent["type"], string> = {
+  "session-start": "会话开始",
+  "session-end": "会话结束",
+  "file-created": "文件新增",
+  "file-modified": "文件修改",
+  "file-deleted": "文件删除",
+  "command-start": "命令开始",
+  "command-end": "命令结束",
+};
+
+const confidenceLabels: Record<AgentEvent["confidence"], string> = {
+  observed: "已观察",
+  reported: "已上报",
+  inferred: "推断",
+};
+
+function sourceLabel(source: string): string {
+  switch (source) {
+    case "filesystem": return localize(source, "文件系统");
+    case "terminal": return localize(source, "终端");
+    case "extension": return localize(source, "扩展");
+    case "unknown": return localize(source, "未知");
+    default: return source;
+  }
+}
 
 export class AgentSessionItem extends vscode.TreeItem {
   constructor(readonly session: AgentSession) {
@@ -8,22 +35,55 @@ export class AgentSessionItem extends vscode.TreeItem {
       ? vscode.TreeItemCollapsibleState.Expanded
       : vscode.TreeItemCollapsibleState.Collapsed);
     this.id = session.id;
-    this.description = `${session.status} · ${session.events.length} events`;
-    this.tooltip = `${session.agent} / ${session.provider}\n${new Date(session.startedAt).toISOString()}${session.summary ? `\n${session.summary}` : ""}`;
+    const status = session.status === "active" ? localize("active", "进行中") : localize("ended", "已结束");
+    this.description = `${status} · ${localize(`${session.events.length} events`, `${session.events.length} 个事件`)}`;
+    const agent = session.agent === "unknown" ? localize("unknown", "未知") : session.agent;
+    const provider = session.provider === "unknown" ? localize("unknown", "未知") : session.provider;
+    this.tooltip = `${agent} / ${provider}\n${new Date(session.startedAt).toISOString()}${session.summary ? `\n${session.summary}` : ""}`;
   }
 }
 
 export class AgentEventItem extends vscode.TreeItem {
   constructor(readonly event: AgentEvent) {
-    super(event.type, vscode.TreeItemCollapsibleState.None);
+    super(localize(event.type, eventLabels[event.type]), vscode.TreeItemCollapsibleState.None);
     this.id = event.id;
+    const source = sourceLabel(event.source);
+    const confidence = localize(event.confidence, confidenceLabels[event.confidence]);
+    const provenance = `${localize("Source", "来源")}: ${source}\n${localize("Confidence", "可信来源")}: ${confidence}`;
+    if (event.type === "command-start" || event.type === "command-end") {
+      const payload = event.payload;
+      const cwd = `${localize("cwd", "工作目录")}: ${payload.cwd ?? localize("unknown", "未知")}`;
+      const result = event.type === "command-end"
+        ? `${localize("duration", "耗时")}: ${(event.payload.duration / 1000).toFixed(1)}${localize("s", "秒")} · ${localize("exit", "退出码")}: ${event.payload.exitCode ?? localize("unknown", "未知")}`
+        : localize("start observed", "已观察到开始执行");
+      this.label = payload.command || localize("(command unavailable)", "（无法获取命令）");
+      this.description = `${localize(event.type, eventLabels[event.type])} · ${cwd} · ${result}`;
+      this.tooltip = [
+        payload.command || localize("(command unavailable)", "（无法获取命令）"),
+        ...(event.source === "terminal" ? [localize("Observed terminal activity; the actor is unknown.", "已观察到终端活动，执行者未知。")] : []),
+        provenance,
+        cwd,
+        `${localize("startedAt", "开始时间")}: ${new Date(payload.startedAt).toISOString()}`,
+        ...(event.type === "command-end" ? [
+          `${localize("endedAt", "结束时间")}: ${new Date(event.payload.endedAt).toISOString()}`,
+          `${localize("duration", "耗时")}: ${(event.payload.duration / 1000).toFixed(1)}${localize("s", "秒")}`,
+          `${localize("exit", "退出码")}: ${event.payload.exitCode ?? localize("unknown", "未知")}`,
+        ] : [localize("Command start observed.", "已观察到命令开始执行。")]),
+      ].join("\n");
+      return;
+    }
     const detail = "uri" in event.payload
       ? vscode.workspace.asRelativePath(vscode.Uri.parse(event.payload.uri))
-      : "command" in event.payload ? event.payload.command : "";
-    this.description = `${new Date(event.timestamp).toLocaleTimeString()} · ${detail ? `${detail} · ` : ""}${event.source} / ${event.confidence}`;
-    this.tooltip = `${new Date(event.timestamp).toISOString()}\nSource: ${event.source}\nConfidence: ${event.confidence}\n${JSON.stringify(event.payload, undefined, 2)}`;
+      : "";
+    this.description = `${new Date(event.timestamp).toLocaleTimeString()} · ${detail ? `${detail} · ` : ""}${source} / ${confidence}`;
+    const payloadDetail = event.type === "session-start"
+      ? `${localize("Title", "标题")}: ${event.payload.title}`
+      : event.type === "session-end"
+        ? `${localize("Summary", "摘要")}: ${event.payload.summary}`
+        : `${localize("File", "文件")}: ${event.payload.uri}`;
+    this.tooltip = `${new Date(event.timestamp).toISOString()}\n${provenance}\n${payloadDetail}`;
     if (event.source === "filesystem") {
-      this.tooltip += "\nA filesystem change was observed; the actor is unknown.";
+      this.tooltip += `\n${localize("A filesystem change was observed; the actor is unknown.", "已观察到文件系统变化，执行者未知。")}`;
     }
   }
 }

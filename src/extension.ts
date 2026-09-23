@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
+import { localize } from "./localize";
 import { HunkCommands } from "./commands/HunkCommands";
 import { FileCommands } from "./commands/FileCommands";
 import { DiffService } from "./diff/DiffService";
 import { WorkspaceBaselineStore } from "./session/WorkspaceBaselineStore";
 import { ReviewSession } from "./session/ReviewSession";
+import { TerminalCollector } from "./session/TerminalCollector";
 import {
   BASELINE_SCHEME,
   BaselineContentProvider,
@@ -18,6 +20,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const baselineStore = new WorkspaceBaselineStore();
   const diffs = new DiffService(baselineStore);
   const session = new ReviewSession(baselineStore, diffs);
+  const terminalCollector = new TerminalCollector(session.agentSessions, vscode.window);
   const baselineProvider = new BaselineContentProvider(baselineStore);
   const hunkCommands = new HunkCommands(
     baselineStore,
@@ -34,7 +37,9 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: timelineProvider,
     showCollapseAll: true,
   });
-  timelineView.message = "Memory only. Filesystem events do not identify the actor.";
+  timelineView.message = terminalCollector.supported
+    ? localize("Memory only. Observed terminal activity requires shell integration. The actor is unknown.", "记录仅保存在内存中。观察终端活动需要 Shell Integration，执行者未知。")
+    : localize("Memory only. Terminal activity unavailable: requires VS Code 1.93+. The actor is unknown.", "记录仅保存在内存中。终端采集需要 VS Code 1.93 或更高版本，执行者未知。");
   const updateAgentSessionUi = (): void => {
     void vscode.commands.executeCommand(
       "setContext", "cursorForgery.agentSessionActive",
@@ -84,7 +89,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }
     treeView.message = state === "ready" && !hasPending && diffs.hasAgentChanges()
-      ? "No pending changes. Session history is available below."
+      ? localize("No pending changes. Session history is available below.", "暂无待审查变更，可在下方查看本次会话的历史记录。")
       : undefined;
   };
   const stateSubscription = session.onDidChangeState(updateReviewUi);
@@ -97,7 +102,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const startSession = async (isReset = false, automatic = false): Promise<void> => {
     if (sessionStartInProgress) {
       void vscode.window.showInformationMessage(
-        "Agent Review is already capturing a baseline.",
+        localize("AgentTrail is already capturing a baseline.", "正在捕获审查基线，请稍候。"),
       );
       return;
     }
@@ -109,7 +114,7 @@ export function activate(context: vscode.ExtensionContext): void {
         : await vscode.window.withProgress(
             {
               location: vscode.ProgressLocation.Notification,
-              title: `${isReset ? "Resetting" : "Starting"} Agent Review session`,
+              title: isReset ? localize("Resetting AgentTrail session", "正在重置审查会话") : localize("Starting AgentTrail session", "正在开始审查会话"),
               cancellable: false,
             },
             (_progress, _token) =>
@@ -117,7 +122,7 @@ export function activate(context: vscode.ExtensionContext): void {
           );
       if (!automatic) {
         void vscode.window.showInformationMessage(
-          `Agent Review session ${isReset ? "reset" : "started"} with ${result.fileCount} files using a ${result.kind} baseline.`,
+          localize(`AgentTrail session ${isReset ? "reset" : "started"} with ${result.fileCount} files using a ${result.kind} baseline.`, `审查会话已${isReset ? "重置" : "开始"}，包含 ${result.fileCount} 个文件，使用${result.kind === "git" ? " Git " : "内存"}基线。`),
         );
       }
     } catch (error) {
@@ -133,7 +138,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (!vscode.extensions.getExtension("openai.chatgpt")) {
       void vscode.window.showInformationMessage(
-        "Install and enable the Codex extension to add this resource.",
+        localize("Install and enable the Codex extension to add this resource.", "请安装并启用 Codex 扩展以添加此资源。"),
       );
       return;
     }
@@ -142,6 +147,7 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
+    terminalCollector,
     session,
     baselineProvider,
     codeLensProvider,

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type {
   BaselineCaptureOptions,
   BaselineStore,
@@ -30,7 +31,7 @@ export class WorkspaceBaselineStore implements BaselineStore {
     }
 
     const memoryStore = new MemoryBaselineStore();
-    options?.report?.("Git baseline unavailable; using memory baseline…");
+    options?.report?.(localize("Git baseline unavailable; using memory baseline…", "Git 基线不可用，正在使用内存基线…"));
     await memoryStore.capture(options);
     this.activeStore = memoryStore;
   }

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { localize } from "../localize";
 import type {
   BaselineCaptureOptions,
   BaselineStore,
@@ -11,11 +12,11 @@ export class MemoryBaselineStore implements BaselineStore {
 
   async capture(options?: BaselineCaptureOptions): Promise<void> {
     this.clear();
-    options?.report?.("Discovering workspace files…");
+    options?.report?.(localize("Discovering workspace files…", "正在查找工作区文件…"));
     const uris =
       options?.uris ??
       (await vscode.workspace.findFiles("**/*", "**/{.git,node_modules}/**"));
-    options?.report?.(`Capturing ${uris.length} files in memory…`);
+    options?.report?.(localize(`Capturing ${uris.length} files in memory…`, `正在捕获 ${uris.length} 个文件的内存基线…`));
     await Promise.all(
       uris.map(async (uri) => {
         const text = await readTextFile(uri);
