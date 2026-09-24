@@ -37,7 +37,7 @@ export async function connectTestCodex(): Promise<void> {
 
 // Drive the same executable and payload contract as Codex, around a controlled file mutation.
 export async function codexWrite(uri: vscode.Uri, after: string | null, session?: ReviewSession): Promise<void> {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const root = vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
   assert.ok(root);
   const workspace = await fs.realpath(root);
   const before = await fs.readFile(uri.fsPath, "utf8").catch((error: unknown) => {

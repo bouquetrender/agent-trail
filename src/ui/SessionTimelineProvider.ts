@@ -45,9 +45,35 @@ export class AgentSessionItem extends vscode.TreeItem {
   }
 }
 
+export class AgentTurnItem extends vscode.TreeItem {
+  constructor(
+    readonly sessionId: string,
+    readonly externalTurnId: string | undefined,
+    events: readonly AgentEvent[],
+    turnNumber: number,
+    expanded: boolean,
+  ) {
+    const title = externalTurnId
+      ? localize(`Turn ${turnNumber}`, `第 ${turnNumber} 轮`)
+      : localize("Unassigned events", "未分轮记录");
+    super(`${new Date(events[0].timestamp).toLocaleTimeString()} · ${title}`, expanded
+      ? vscode.TreeItemCollapsibleState.Expanded
+      : vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = JSON.stringify([sessionId, "turn", externalTurnId ?? null]);
+    this.description = localize(`${events.length} events`, `${events.length} 个事件`);
+    this.tooltip = [
+      title,
+      `${new Date(events[0].timestamp).toISOString()} – ${new Date(events[events.length - 1].timestamp).toISOString()}`,
+      externalTurnId ? `Codex turn: ${externalTurnId}`
+        : localize("These events have no conversation turn ID.", "这些记录没有对话轮次 ID。"),
+    ].join("\n");
+  }
+}
+
 export class AgentEventItem extends vscode.TreeItem {
   constructor(readonly event: AgentEvent) {
-    super(localize(event.type, eventLabels[event.type]), vscode.TreeItemCollapsibleState.None);
+    const time = new Date(event.timestamp).toLocaleTimeString();
+    super(`${time} · ${localize(event.type, eventLabels[event.type])}`, vscode.TreeItemCollapsibleState.None);
     this.id = event.id;
     const source = sourceLabel(event.source);
     const confidence = localize(event.confidence, confidenceLabels[event.confidence]);
@@ -59,7 +85,7 @@ export class AgentEventItem extends vscode.TreeItem {
         : payload.outcome === "succeeded" ? localize("Succeeded", "成功")
           : payload.outcome === "failed" ? localize("Failed", "失败")
             : localize("Result received; outcome unknown", "已返回结果，执行状态未知");
-      this.label = payload.command || payload.tool;
+      this.label = `${time} · ${payload.command || payload.tool}`;
       const details = [status, `${localize("cwd", "工作目录")}: ${payload.cwd}`];
       if (payload.phase === "completed") {
         details.push(`${localize("exit", "退出码")}: ${payload.exitCode ?? localize("unknown", "未知")}`);
@@ -67,7 +93,7 @@ export class AgentEventItem extends vscode.TreeItem {
           ? localize("unknown", "未知") : `${(payload.durationMs / 1000).toFixed(1)}${localize("s", "秒")}`}`);
       }
       this.description = details.join(" · ");
-      this.tooltip = [String(this.label), ...details, provenance,
+      this.tooltip = [payload.command || payload.tool, ...details, provenance,
         `${localize("Time", "时间")}: ${new Date(event.timestamp).toISOString()}`,
         `Codex turn: ${event.externalTurnId ?? ""}`, `Codex tool call: ${event.externalCallId ?? ""}`,
       ].join("\n");
@@ -79,7 +105,7 @@ export class AgentEventItem extends vscode.TreeItem {
       const result = event.type === "command-end"
         ? `${localize("duration", "耗时")}: ${(event.payload.duration / 1000).toFixed(1)}${localize("s", "秒")} · ${localize("exit", "退出码")}: ${event.payload.exitCode ?? localize("unknown", "未知")}`
         : localize("start observed", "已观察到开始执行");
-      this.label = payload.command || localize("(command unavailable)", "（无法获取命令）");
+      this.label = `${time} · ${payload.command || localize("(command unavailable)", "（无法获取命令）")}`;
       this.description = `${localize(event.type, eventLabels[event.type])} · ${cwd} · ${result}`;
       this.tooltip = [
         payload.command || localize("(command unavailable)", "（无法获取命令）"),
@@ -98,7 +124,7 @@ export class AgentEventItem extends vscode.TreeItem {
     const detail = "uri" in event.payload
       ? vscode.workspace.asRelativePath(vscode.Uri.parse(event.payload.uri))
       : "";
-    this.description = `${new Date(event.timestamp).toLocaleTimeString()} · ${detail ? `${detail} · ` : ""}${source} / ${confidence}`;
+    this.description = `${detail ? `${detail} · ` : ""}${source} / ${confidence}`;
     const payloadDetail = event.type === "session-start"
       ? `${localize("Title", "标题")}: ${event.payload.title}`
       : event.type === "session-end"
@@ -111,7 +137,7 @@ export class AgentEventItem extends vscode.TreeItem {
   }
 }
 
-type TimelineItem = AgentSessionItem | AgentEventItem;
+type TimelineItem = AgentSessionItem | AgentTurnItem | AgentEventItem;
 
 export class SessionTimelineProvider
   implements vscode.TreeDataProvider<TimelineItem>, vscode.Disposable
@@ -130,12 +156,35 @@ export class SessionTimelineProvider
 
   getChildren(element?: TimelineItem): TimelineItem[] {
     if (!element) {
-      return this.sessions.getSessions().map((session) => new AgentSessionItem(session));
+      return [...this.sessions.getSessions()].reverse().sort((a, b) =>
+        (b.events[b.events.length - 1]?.timestamp ?? b.startedAt) -
+        (a.events[a.events.length - 1]?.timestamp ?? a.startedAt),
+      ).map((session) => new AgentSessionItem(session));
     }
     if (element instanceof AgentSessionItem) {
-      return this.sessions.getSession(element.session.id)?.events.map(
-        (event) => new AgentEventItem(event),
-      ) ?? [];
+      const turns = new Map<string, AgentEvent[]>();
+      const unassigned: AgentEvent[] = [];
+      for (const event of this.sessions.getSession(element.session.id)?.events ?? []) {
+        if (!event.externalTurnId) {
+          unassigned.push(event);
+          continue;
+        }
+        const events = turns.get(event.externalTurnId) ?? [];
+        events.push(event);
+        turns.set(event.externalTurnId, events);
+      }
+      const items = [...turns].map(([turnId, events], index) => new AgentTurnItem(
+        element.session.id, turnId, events, index + 1, index === turns.size - 1,
+      )).reverse();
+      if (unassigned.length > 0) {
+        items.push(new AgentTurnItem(element.session.id, undefined, unassigned, 0, turns.size === 0));
+      }
+      return items;
+    }
+    if (element instanceof AgentTurnItem) {
+      return (this.sessions.getSession(element.sessionId)?.events ?? [])
+        .filter((event) => (event.externalTurnId || undefined) === element.externalTurnId)
+        .reverse().map((event) => new AgentEventItem(event));
     }
     return [];
   }

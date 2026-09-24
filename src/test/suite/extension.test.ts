@@ -945,7 +945,7 @@ suite("AgentTrail extension", function () {
       assert.ok(firstId);
       const root = timeline.getChildren()[0];
       assert.ok(root instanceof AgentSessionItem);
-      const fileEvents = timeline.getChildren(root).filter((item) =>
+      const fileEvents = timeline.getChildren(root).flatMap((item) => timeline.getChildren(item)).filter((item) =>
         item instanceof AgentEventItem && item.event.type === "file-modified" &&
         item.event.payload.uri === sampleUri.toString(),
       );

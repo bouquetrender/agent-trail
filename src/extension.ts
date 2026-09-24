@@ -39,8 +39,8 @@ export function activate(context: vscode.ExtensionContext): void {
     showCollapseAll: true,
   });
   timelineView.message = localize(
-    "Codex hooks only. Connect Codex and trust its hooks to record activity. History is cleared on reload.",
-    "仅记录 Codex hooks 上报的活动。请接入 Codex 并信任 hooks。重载窗口后历史清空。",
+    "Codex hooks only. Connect and trust once for all local projects. History is cleared on reload.",
+    "仅记录 Codex hooks 上报的活动。接入并信任一次即可用于所有本地项目。重载窗口后历史清空。",
   );
   const reportCodexError = (error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error);
@@ -51,18 +51,35 @@ export function activate(context: vscode.ExtensionContext): void {
     ["file", "vscode-userdata"].includes(context.globalStorageUri.scheme)
     ? context.globalStorageUri.fsPath : undefined;
   let disposed = false;
+  let pendingReaders: Promise<void> = Promise.resolve();
   const startCodexReaders = async (): Promise<void> => {
     if (!vscode.workspace.isTrusted || !storagePath) { return; }
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      if (folder.uri.scheme !== "file") { continue; }
-      const root = await fs.realpath(folder.uri.fsPath);
-      if (disposed || readers.has(root)) { continue; }
-      const reader = new CodexEventReader(storagePath, root,
-        (event) => session.codexEvents.accept(event), reportCodexError);
-      readers.set(root, reader);
-      context.subscriptions.push(reader);
-      await reader.start();
-    }
+    pendingReaders = pendingReaders.catch(() => {}).then(async () => {
+      const roots = new Set(await Promise.all((vscode.workspace.workspaceFolders ?? [])
+        .filter((folder) => folder.uri.scheme === "file")
+        .map((folder) => fs.realpath(folder.uri.fsPath))));
+      if (disposed) { return; }
+      for (const [root, reader] of readers) {
+        if (!roots.has(root)) {
+          reader.dispose();
+          readers.delete(root);
+        }
+      }
+      for (const root of roots) {
+        if (disposed || readers.has(root)) { continue; }
+        const reader = new CodexEventReader(storagePath, root,
+          (event) => session.codexEvents.accept(event), reportCodexError);
+        readers.set(root, reader);
+        try {
+          await reader.start();
+        } catch (error) {
+          reader.dispose();
+          readers.delete(root);
+          throw error;
+        }
+      }
+    });
+    await pendingReaders;
   };
   const connectCodex = async (): Promise<void> => {
     if (!vscode.workspace.isTrusted) {
@@ -70,23 +87,18 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const folders = vscode.workspace.workspaceFolders?.filter((folder) => folder.uri.scheme === "file") ?? [];
-    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({
-      placeHolder: localize("Choose the project to connect to Codex", "选择要接入 Codex 的项目"),
-    });
-    if (!folder) { return; }
-    if (folder.uri.scheme !== "file" || !storagePath) {
+    if (!folders.length || !storagePath) {
       void vscode.window.showInformationMessage(localize("Codex hooks currently require a local VS Code workspace.", "Codex hooks 目前需要本地 VS Code 工作区。"));
       return;
     }
     try {
-      const root = await fs.realpath(folder.uri.fsPath);
-      const config = await installCodexHooks(root, storagePath,
+      const config = await installCodexHooks(storagePath,
         vscode.Uri.joinPath(context.extensionUri, "out", "codex", "hook.js").fsPath, process.execPath);
       await startCodexReaders();
       await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(config));
       void vscode.window.showInformationMessage(localize(
-        "User-level Codex hooks configured outside the project. Review and trust the hooks in Codex (CLI: /hooks), then start a new Codex turn. Reconnect after an AgentTrail update to refresh the hook script.",
-        "Codex hooks 已配置到项目之外的用户目录。请在 Codex 中审查并信任 hooks（CLI：/hooks），然后开始新一轮任务。更新 AgentTrail 后可再次接入以更新采集脚本。",
+        "Shared user-level Codex hooks configured. Review and trust them in Codex (CLI: /hooks), then start a new turn. New local projects connect automatically. Reconnect after an AgentTrail update to refresh the script.",
+        "已配置共用的用户级 Codex hooks。请在 Codex 中审查并信任（CLI：/hooks），然后开始新一轮任务。新打开的本地项目会自动接入。更新 AgentTrail 后可再次接入以更新脚本。",
       ));
     } catch (error) { reportCodexError(error); }
   };
@@ -197,8 +209,13 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
-    { dispose: () => { disposed = true; } },
+    { dispose: () => { disposed = true; readers.forEach((reader) => reader.dispose()); readers.clear(); } },
     vscode.workspace.onDidGrantWorkspaceTrust(() => { void startCodexReaders().catch(reportCodexError); }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void startCodexReaders().then(async () => {
+        if (!disposed && vscode.workspace.workspaceFolders?.length) { await startSession(false, true); }
+      }).catch(reportCodexError);
+    }),
     vscode.commands.registerCommand("cursorForgery.connectCodex", connectCodex),
     session,
     baselineProvider,

@@ -6,6 +6,7 @@ export async function run(): Promise<void> {
   mocha.addFile(path.resolve(__dirname, "extension.test.js"));
   mocha.addFile(path.resolve(__dirname, "codex.test.js"));
   mocha.addFile(path.resolve(__dirname, "localization.test.js"));
+  mocha.addFile(path.resolve(__dirname, "timeline.test.js"));
 
   await new Promise<void>((resolve, reject) => {
     mocha.run((failures) => {

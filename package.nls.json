@@ -1,6 +1,6 @@
 {
   "command.connectCodex": "AgentTrail: Connect Codex",
-  "welcome.codex": "Record only Codex tool activity. Connect this project, then review and trust the hooks in Codex.\n[Connect Codex](command:cursorForgery.connectCodex)",
+  "welcome.codex": "Record only Codex tool activity. Connect and trust the hooks once for all local projects.\n[Connect Codex](command:cursorForgery.connectCodex)",
   "command.endAgentSession": "AgentTrail: End Agent Session",
   "command.startSession": "AgentTrail: Start Session",
   "command.resetSession": "AgentTrail: Reset Session",

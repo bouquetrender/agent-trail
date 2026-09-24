@@ -252,7 +252,7 @@ suite("Codex hook installation and local relay", () => {
       type: "command", command: "old-machine-command", statusMessage: "AgentTrail Codex activity",
     }] }] } });
     await fs.writeFile(legacyPath, legacy);
-    const config = await installCodexHooks(workspace, storage, script, process.execPath, codexHome);
+    const config = await installCodexHooks(storage, script, process.execPath, codexHome);
     assert.strictEqual(config, path.join(codexHome, "hooks.json"));
     assert.strictEqual(await fs.readFile(legacyPath, "utf8"), legacy);
     assert.deepStrictEqual(await fs.readdir(path.dirname(legacyPath)), ["hooks.json"]);
@@ -286,13 +286,13 @@ suite("Codex hook installation and local relay", () => {
     } };
     const config = path.join(codexHome, "hooks.json");
     await fs.writeFile(config, JSON.stringify(original));
-    await installCodexHooks(workspace, storage, script, process.execPath, codexHome);
+    await installCodexHooks(storage, script, process.execPath, codexHome);
     const installed = await fs.readFile(config, "utf8");
     const parsed: unknown = JSON.parse(installed);
     assert.ok(isObject(parsed) && isObject(parsed.hooks) && Array.isArray(parsed.hooks.PreToolUse));
     assert.deepStrictEqual(parsed.hooks.PreToolUse[0], original.hooks.PreToolUse[0]);
     assert.deepStrictEqual(parsed.hooks.Stop, original.hooks.Stop);
-    await installCodexHooks(workspace, storage, script, process.execPath, codexHome);
+    await installCodexHooks(storage, script, process.execPath, codexHome);
     assert.strictEqual(await fs.readFile(config, "utf8"), installed);
     const backups = (await fs.readdir(path.dirname(config))).filter((name) => name.includes("backup"));
     assert.strictEqual(backups.length, 1);
@@ -300,45 +300,49 @@ suite("Codex hook installation and local relay", () => {
     await assert.rejects(fs.access(path.join(workspace, ".codex")), { code: "ENOENT" });
   });
 
-  test("connecting and updating one project preserves other project hooks", async () => {
-    const otherWorkspace = path.join(fixture, "second project");
-    await fs.mkdir(otherWorkspace);
-    const config = await installCodexHooks(workspace, storage, script, process.execPath, codexHome);
-    await installCodexHooks(otherWorkspace, storage, script, process.execPath, codexHome);
-    const before: unknown = JSON.parse(await fs.readFile(config, "utf8"));
-    assert.ok(isObject(before) && isObject(before.hooks));
-    const updatedExecutable = path.join(fixture, "updated executable");
-    await installCodexHooks(workspace, storage, script, updatedExecutable, codexHome);
+  test("migrates per-project handlers to three shared hooks and reconnects idempotently", async () => {
+    await fs.mkdir(codexHome);
+    const custom = { type: "command", command: "custom-script", statusMessage: "My custom hook" };
+    const original = { hooks: Object.fromEntries(["PreToolUse", "PostToolUse", "SessionEnd"].map((event) => [event, [
+      { hooks: [{ type: "command", command: "old-global", statusMessage: "AgentTrail Codex activity" }] },
+      { matcher: "Bash", hooks: [custom, { type: "command", command: "old-project-a",
+        statusMessage: `AgentTrail Codex activity: ${workspace}` }] },
+      { hooks: [{ type: "command", command: "old-project-b", statusMessage: "AgentTrail Codex activity: /other/project" }] },
+    ]])) };
+    const config = path.join(codexHome, "hooks.json");
+    await fs.writeFile(config, JSON.stringify(original));
+    await installCodexHooks(storage, script, process.execPath, codexHome);
     const installed = await fs.readFile(config, "utf8");
-    const after: unknown = JSON.parse(installed);
-    assert.ok(isObject(after) && isObject(after.hooks));
+    const parsed = JSON.parse(installed);
     for (const event of ["PreToolUse", "PostToolUse", "SessionEnd"]) {
-      const oldGroups: unknown = before.hooks[event];
-      const groups: unknown = after.hooks[event];
-      assert.ok(Array.isArray(oldGroups) && Array.isArray(groups));
-      assert.strictEqual(groups.length, 2);
-      assert.deepStrictEqual(groups[0], oldGroups[1]);
-      const updated: unknown = groups[1];
-      assert.ok(isObject(updated) && Array.isArray(updated.hooks));
-      assert.strictEqual(updated.hooks.length, 1);
-      const handler: unknown = updated.hooks[0];
-      assert.ok(isObject(handler) && typeof handler.command === "string");
-      assert.strictEqual(handler.statusMessage, `AgentTrail Codex activity: ${workspace}`);
-      assert.ok(handler.command.includes(updatedExecutable));
+      assert.strictEqual(parsed.hooks[event].length, 2);
+      assert.deepStrictEqual(parsed.hooks[event][0], { matcher: "Bash", hooks: [custom] });
+      const handler = parsed.hooks[event][1].hooks[0];
+      assert.strictEqual(handler.statusMessage, "AgentTrail Codex activity");
+      assert.ok(!handler.command.includes(workspace));
     }
-    await installCodexHooks(workspace, storage, script, updatedExecutable, codexHome);
+    await installCodexHooks(storage, script, process.execPath, codexHome);
     assert.strictEqual(await fs.readFile(config, "utf8"), installed);
-    await assert.rejects(fs.access(path.join(otherWorkspace, ".codex")), { code: "ENOENT" });
+    const backups = (await fs.readdir(codexHome)).filter((name) => name.includes("backup"));
+    assert.strictEqual(backups.length, 1);
+    assert.deepStrictEqual(JSON.parse(await fs.readFile(path.join(codexHome, backups[0]), "utf8")), original);
+    const updatedExecutable = path.join(fixture, "updated executable");
+    await installCodexHooks(storage, script, updatedExecutable, codexHome);
+    const updated = JSON.parse(await fs.readFile(config, "utf8"));
+    for (const event of ["PreToolUse", "PostToolUse", "SessionEnd"]) {
+      assert.strictEqual(updated.hooks[event].length, 2);
+      assert.ok(updated.hooks[event][1].hooks[0].command.includes(updatedExecutable));
+    }
   });
 
   test("does not overwrite malformed hook configuration", async () => {
     await fs.mkdir(codexHome);
     const config = path.join(codexHome, "hooks.json");
     await fs.writeFile(config, "{invalid json");
-    await assert.rejects(installCodexHooks(workspace, storage, script, process.execPath, codexHome));
+    await assert.rejects(installCodexHooks(storage, script, process.execPath, codexHome));
     assert.strictEqual(await fs.readFile(config, "utf8"), "{invalid json");
-    assert.throws(() => mergeHooks({ hooks: { PreToolUse: {} } }, "command", workspace), /Invalid Codex/);
-    assert.throws(() => hookCommand("node", "%unsafe%", "root", "events", "win32"), /Hook paths/);
+    assert.throws(() => mergeHooks({ hooks: { PreToolUse: {} } }, "command"), /Invalid Codex/);
+    assert.throws(() => hookCommand("node", "%unsafe%", "events", "win32"), /Hook paths/);
   });
 
   test("initializes empty hook configuration and backs up its original contents", async () => {
@@ -346,7 +350,7 @@ suite("Codex hook installation and local relay", () => {
     const config = path.join(codexHome, "hooks.json");
     for (const previous of ["", " \n\t"]) {
       await fs.writeFile(config, previous);
-      assert.strictEqual(await installCodexHooks(workspace, storage, script, process.execPath, codexHome), config);
+      assert.strictEqual(await installCodexHooks(storage, script, process.execPath, codexHome), config);
       const installed: unknown = JSON.parse(await fs.readFile(config, "utf8"));
       assert.ok(isObject(installed) && isObject(installed.hooks));
       for (const event of ["PreToolUse", "PostToolUse", "SessionEnd"]) {
@@ -371,7 +375,7 @@ suite("Codex hook installation and local relay", () => {
       (event) => events.push(event), (error) => errors.push(error)));
     try {
       await Promise.all(readers.map((reader) => reader.start()));
-      const config = await installCodexHooks(workspace, storage, script, process.execPath, codexHome);
+      const config = await installCodexHooks(storage, script, process.execPath, codexHome);
       const parsed: unknown = JSON.parse(await fs.readFile(config, "utf8"));
       assert.ok(isObject(parsed) && isObject(parsed.hooks) && Array.isArray(parsed.hooks.PreToolUse));
       const group: unknown = parsed.hooks.PreToolUse[0];
@@ -406,12 +410,54 @@ suite("Codex hook installation and local relay", () => {
     }
   });
 
+  test("automatically routes to a newly opened project without reconnecting", async function () {
+    this.timeout(10_000);
+    const config = await installCodexHooks(storage, script, process.execPath, codexHome);
+    const installed = await fs.readFile(config, "utf8");
+    const parsed = JSON.parse(installed);
+    const command = parsed.hooks.PreToolUse[0].hooks[0].command;
+    const newWorkspace = path.join(fixture, "new project");
+    const nestedCwd = path.join(newWorkspace, "src");
+    await fs.mkdir(nestedCwd, { recursive: true });
+    const received: CodexHookEvent[] = [];
+    const errors: unknown[] = [];
+    const reader = new CodexEventReader(storage, newWorkspace,
+      (event) => received.push(event), (error) => errors.push(error));
+    const unrelated: CodexHookEvent[] = [];
+    const otherReader = new CodexEventReader(storage, workspace,
+      (event) => unrelated.push(event), (error) => errors.push(error));
+    try {
+      await Promise.all([reader.start(), otherReader.start()]);
+      for (const hook_event_name of ["PreToolUse", "PostToolUse", "SessionEnd"]) {
+        await new Promise<void>((resolve, reject) => {
+          const child = exec(command, (error) => error ? reject(error) : resolve());
+          child.stdin?.end(JSON.stringify({ hook_event_name, session_id: "new-project",
+            tool_use_id: "call", cwd: nestedCwd, tool_name: "Bash", tool_input: { command: "npm test" } }));
+        });
+      }
+      const deadline = Date.now() + 2000;
+      while (received.length < 3 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.deepStrictEqual(errors, []);
+      assert.deepStrictEqual(received.map((event) => event.phase), ["requested", "completed", "session-end"]);
+      assert.strictEqual(received[0].workspace, newWorkspace);
+      assert.strictEqual(received[0].cwd, nestedCwd);
+      assert.deepStrictEqual(unrelated, []);
+      assert.strictEqual(await fs.readFile(config, "utf8"), installed);
+    } finally {
+      reader.dispose();
+      otherReader.dispose();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  });
+
   test("does not retain events when the editor is closed", async () => {
     const directory = eventDirectory(storage, workspace);
     const inbox = path.join(directory, "expired-listener");
     await fs.mkdir(inbox, { recursive: true });
     await fs.writeFile(path.join(inbox, "lease.json"), JSON.stringify({ expiresAt: 1 }));
-    const command = hookCommand(process.execPath, script, workspace, directory);
+    const command = hookCommand(process.execPath, script, storage);
     await new Promise<void>((resolve, reject) => {
       const child = exec(command, (error) => error ? reject(error) : resolve());
       child.stdin?.end(JSON.stringify({ hook_event_name: "PreToolUse", session_id: "closed",

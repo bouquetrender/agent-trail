@@ -1,6 +1,6 @@
 {
   "command.connectCodex": "AgentTrail：接入 Codex",
-  "welcome.codex": "仅记录 Codex 工具活动。接入当前项目后，请在 Codex 中审查并信任 hooks。\n[接入 Codex](command:cursorForgery.connectCodex)",
+  "welcome.codex": "仅记录 Codex 工具活动。接入并信任一次 hooks，即可用于所有本地项目。\n[接入 Codex](command:cursorForgery.connectCodex)",
   "command.endAgentSession": "AgentTrail：结束会话",
   "command.startSession": "AgentTrail：开始会话",
   "command.resetSession": "AgentTrail：重置会话",

@@ -29,12 +29,14 @@ to Codex, or use the selection hover to add code, files, or folders to a thread.
 
 1. Install the AgentTrail VSIX and open a trusted local project.
 2. Click the plug icon in **SESSION TIMELINE**, or run **AgentTrail: Connect Codex**.
-   In a multi-root workspace, choose the project to connect; repeat for other projects.
+   Connect once per machine; newly opened trusted local projects connect automatically,
+   including folders added to a multi-root workspace.
 3. The command opens the user-level `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`
    if `CODEX_HOME` is set in VS Code's environment). Use the same Codex home for VS Code
-   and Codex. Existing hooks and connections for other projects are preserved; changes
-   to an existing file are backed up alongside it. Each project's handlers only collect
-   activity inside that project. The collector script stays in VS Code's extension
+   and Codex. AgentTrail uses three shared handlers for all open projects. Reconnecting
+   consolidates older per-project AgentTrail handlers and preserves other hooks; changes
+   to an existing file are backed up alongside it. Events only reach open workspaces
+   containing the activity. The collector script stays in VS Code's extension
    storage. No project files or Git ignore rules are created or changed.
 4. Review and trust the hooks in Codex (CLI: `/hooks`). Start a new Codex turn after
    the configuration is loaded. Installing a VSIX alone does not enable recording.
@@ -46,8 +48,11 @@ Requires a Codex runtime supporting `PreToolUse` / `PostToolUse` for `Bash` and
 The extension does not automatically grant hook trust. After an AgentTrail or VS Code update, run
 **Connect Codex** again to install the updated script, then review any changed hook definitions.
 Generated commands contain machine-specific absolute paths; configure each machine separately.
-To disconnect a project, remove only handlers labelled `AgentTrail Codex activity: <project path>`
-from the user-level hook file.
+When upgrading from per-project handlers, connect and review the shared hooks once;
+opening another project no longer adds hooks or requires reconnecting. Close a project
+to stop receiving its events. To disconnect AgentTrail entirely, remove only handlers
+labelled `AgentTrail Codex activity` from the user-level hook file.
+Adding or removing workspace folders captures a fresh review baseline.
 
 If you previously connected with project-level hooks, reconnect and trust the user-level
 hooks, then remove only the old handlers labelled `AgentTrail Codex activity` from

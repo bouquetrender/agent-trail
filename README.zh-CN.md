@@ -20,14 +20,14 @@
 ## 接入 Codex
 
 1. 安装 AgentTrail VSIX，打开并信任本地项目。
-2. 点击 **会话时间线** 标题栏的插头图标，或执行 **AgentTrail：接入 Codex**。多根工作区需要选择项目，可对其他项目重复接入。
-3. 命令会打开用户级 `~/.codex/hooks.json`；如果 VS Code 环境设置了 `CODEX_HOME`，则使用 `$CODEX_HOME/hooks.json`，请确保 VS Code 与 Codex 使用相同的配置目录。原有 hooks 和其他项目的接入配置都会保留；修改已有配置时会在旁边保存备份。每个项目的处理器仅采集该项目内的活动。采集脚本仍安装在 VS Code 的扩展存储目录，不创建或修改项目文件及 Git 忽略规则。
+2. 点击 **会话时间线** 标题栏的插头图标，或执行 **AgentTrail：接入 Codex**。每台机器接入一次，新打开并信任的本地项目会自动接入，也支持在多根工作区中新增文件夹。
+3. 命令会打开用户级 `~/.codex/hooks.json`；如果 VS Code 环境设置了 `CODEX_HOME`，则使用 `$CODEX_HOME/hooks.json`，请确保 VS Code 与 Codex 使用相同的配置目录。所有打开的项目共用三个 AgentTrail hooks；再次接入会合并旧的按项目注册的 AgentTrail hooks，并保留其他 hooks。修改已有配置时会在旁边保存备份。事件只分发给包含该活动的已打开工作区。采集脚本仍安装在 VS Code 的扩展存储目录，不创建或修改项目文件及 Git 忽略规则。
 4. 在 Codex 中审查并信任 hooks（CLI 使用 `/hooks`），配置加载后开始新一轮 Codex 任务。仅安装 VSIX 不会自动启用记录。
 5. Codex 工作时保持 VS Code 窗口打开。**结束会话**暂停记录；**开始会话**／**重置会话**重新捕获审查基线并恢复记录。
 
 需要 Codex 运行时支持针对 `Bash`、`apply_patch` 的 `PreToolUse`／`PostToolUse`，以及 `SessionEnd`。参考 [Codex hooks 官方文档](https://learn.chatgpt.com/docs/hooks)。扩展不会自动授予 hook 信任。
 
-更新 AgentTrail 或 VS Code 后，再次执行**接入 Codex**以更新采集脚本，并在 Codex 中审查变化的 hook 定义。生成的命令包含本机绝对路径，每台机器需要单独配置。断开某个项目时，只需从用户级 hook 配置中删除标记为 `AgentTrail Codex activity: <项目路径>` 的处理器。
+更新 AgentTrail 或 VS Code 后，再次执行**接入 Codex**以更新采集脚本，并在 Codex 中审查变化的 hook 定义。生成的命令包含本机绝对路径，每台机器需要单独配置。从旧版按项目注册的方式升级时，只需接入并审查一次共用 hooks；此后打开新项目无需重连，也不会新增 hooks。关闭项目即可停止接收该项目的事件；完全断开 AgentTrail 时，只需从用户级配置删除标记为 `AgentTrail Codex activity` 的处理器。增删工作区文件夹时会重新捕获审查基线。
 
 如果之前使用过项目级接入，请重新接入并信任用户级 hooks，然后从 `<项目>/.codex/hooks.json` 中只删除旧的 `AgentTrail Codex activity` 处理器。Codex 会同时加载两处配置，保留旧条目可能导致重复执行或继续调用旧机器路径。扩展不会自动修改旧项目文件；请保留团队其他 hooks。如果文件仅包含 AgentTrail hooks，可以将该文件及其 `.agenttrail-backup-*` 备份从仓库中移除。
 

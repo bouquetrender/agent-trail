@@ -11,6 +11,9 @@ async function main(): Promise<void> {
     path.join(tmpdir(), "agent-diff-review-workspace-"),
   );
   const codexHome = mkdtempSync(path.join(tmpdir(), "agenttrail-test-codex-"));
+  const testState = mkdtempSync(path.join(tmpdir(), "agenttrail-test-state-"));
+  const workspaceFile = path.join(testState, "test.code-workspace");
+  writeFileSync(workspaceFile, JSON.stringify({ folders: [{ path: workspacePath }] }));
   writeFileSync(path.join(workspacePath, "sample.txt"), "alpha\nbeta\ngamma\n");
   writeFileSync(path.join(workspacePath, "second.txt"), "red\ngreen\nblue\n");
   writeFileSync(path.join(workspacePath, "staged.txt"), "staged content\n");
@@ -24,11 +27,13 @@ async function main(): Promise<void> {
       extensionDevelopmentPath,
       extensionTestsPath,
       extensionTestsEnv: { CODEX_HOME: codexHome },
-      launchArgs: [workspacePath, "--disable-extensions", "--disable-workspace-trust"],
+      launchArgs: [workspaceFile, "--user-data-dir", path.join(testState, "user-data"),
+        "--disable-extensions", "--disable-workspace-trust"],
     });
   } finally {
     rmSync(workspacePath, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
+    rmSync(testState, { recursive: true, force: true });
   }
 }
 

@@ -7,7 +7,7 @@ import { MemoryBaselineStore } from "../../session/MemoryBaselineStore";
 import { ReviewSession } from "../../session/ReviewSession";
 import { SessionManager } from "../../session/SessionManager";
 import { AllAgentChangesItem, CurrentTurnItem, FileChangeItem, HunkChangeItem } from "../../ui/ChangeTreeProvider";
-import { AgentEventItem, AgentSessionItem } from "../../ui/SessionTimelineProvider";
+import { AgentEventItem, AgentSessionItem, AgentTurnItem } from "../../ui/SessionTimelineProvider";
 
 suite("Review localization", () => {
   let languageDescriptor: PropertyDescriptor;
@@ -61,7 +61,7 @@ suite("Review localization", () => {
         });
         assert.ok(event);
         const item = new AgentEventItem(event);
-        assert.strictEqual(item.label, "npm test");
+        assert.strictEqual(item.label, `${new Date(event.timestamp).toLocaleTimeString()} · npm test`);
         assert.strictEqual(item.description, chinese
           ? "命令结束 · 工作目录: /workspace/project · 耗时: 8.2秒 · 退出码: 0"
           : "command-end · cwd: /workspace/project · duration: 8.2s · exit: 0");
@@ -74,8 +74,13 @@ suite("Review localization", () => {
         });
         assert.ok(fileEvent);
         const fileItem = new AgentEventItem(fileEvent);
-        assert.strictEqual(fileItem.label, chinese ? "文件修改" : "file-modified");
+        assert.strictEqual(fileItem.label, `${new Date(fileEvent.timestamp).toLocaleTimeString()} · ${chinese ? "文件修改" : "file-modified"}`);
         assert.ok(String(fileItem.tooltip).includes(chinese ? "来源: 文件系统" : "Source: filesystem"));
+        const turn = new AgentTurnItem(event.sessionId, "turn-1", [event], 1, true);
+        assert.strictEqual(turn.label, `${new Date(event.timestamp).toLocaleTimeString()} · ${chinese ? "第 1 轮" : "Turn 1"}`);
+        assert.strictEqual(turn.description, chinese ? "1 个事件" : "1 events");
+        const unassigned = new AgentTurnItem(event.sessionId, undefined, [event], 0, false);
+        assert.strictEqual(unassigned.label, `${new Date(event.timestamp).toLocaleTimeString()} · ${chinese ? "未分轮记录" : "Unassigned events"}`);
         const active = sessions.getCurrentSession();
         assert.ok(active);
         const activeItem = new AgentSessionItem(active);

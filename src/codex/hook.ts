@@ -275,39 +275,53 @@ export function isMissing(error: unknown): boolean {
   return isObject(error) && error.code === "ENOENT";
 }
 
-async function relay(): Promise<void> {
-  const [workspace, directory] = process.argv.slice(2);
-  if (!workspace || !directory) {
-    throw new Error("Expected workspace and event directory arguments.");
-  }
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const input: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  if (isObject(input) && typeof input.cwd === "string") {
-    input.cwd = await fs.realpath(input.cwd);
-  }
-  const event = await captureHook(input, workspace);
-  if (!event) {
-    return;
-  }
+export function eventDirectory(storage: string, workspace: string): string {
+  const key = createHash("sha256").update(workspace).digest("hex");
+  return path.join(storage, "codex-events", key);
+}
+
+async function relayWorkspace(input: unknown, storage: string, workspace: string): Promise<void> {
+  const directory = eventDirectory(storage, workspace);
   const listeners = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
     if (isMissing(error)) { return []; }
     throw error;
   });
+  let event: CodexHookEvent | undefined;
   for (const listener of listeners) {
     if (!listener.isDirectory()) { continue; }
     const inbox = path.join(directory, listener.name);
     try {
       const lease: unknown = JSON.parse(await fs.readFile(path.join(inbox, "lease.json"), "utf8"));
       if (!isObject(lease) || typeof lease.expiresAt !== "number" || lease.expiresAt < Date.now()) { continue; }
+      event ??= await captureHook(input, workspace);
+      if (!event) { return; }
       const temporary = path.join(inbox, `${randomUUID()}.tmp`);
       await fs.writeFile(temporary, JSON.stringify(event), { mode: 0o600 });
       await fs.rename(temporary, path.join(inbox, `${event.id}.json`));
     } catch (error) {
       if (!isMissing(error)) { throw error; }
     }
+  }
+}
+
+async function relay(): Promise<void> {
+  const [storage] = process.argv.slice(2);
+  if (!storage) {
+    throw new Error("Expected extension storage argument.");
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const input: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!isObject(input) || typeof input.cwd !== "string" || !path.isAbsolute(input.cwd)) { return; }
+  const cwd = await fs.realpath(input.cwd);
+  input.cwd = cwd;
+  // Readers register automatically when a trusted project opens. Check its ancestors
+  // so tools running in subdirectories also reach the matching workspace(s).
+  for (let workspace = cwd; ; workspace = path.dirname(workspace)) {
+    await relayWorkspace(input, storage, workspace);
+    if (path.dirname(workspace) === workspace) { break; }
   }
 }
 
